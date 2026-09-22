@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{watch, Mutex, Notify};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -63,6 +63,13 @@ pub struct EngineStatusPayload {
     pub options_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchPhase {
+    Idle,
+    Searching,
+    Stopping,
+}
+
 #[derive(Debug, Clone)]
 pub struct ActiveSearch {
     pub search_id: u64,
@@ -76,6 +83,9 @@ pub struct EngineState {
     pub engine_path: Option<PathBuf>,
     pub nnue_path: Option<PathBuf>,
     pub is_searching: bool,
+    pub search_phase: SearchPhase,
+    pub phase_tx: watch::Sender<SearchPhase>,
+    pub phase_rx: watch::Receiver<SearchPhase>,
     pub engine_name: String,
     pub engine_author: String,
     pub current_search_id: u64,
@@ -91,12 +101,16 @@ static SEARCH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 impl EngineState {
     pub fn new() -> Self {
+        let (phase_tx, phase_rx) = watch::channel(SearchPhase::Idle);
         Self {
             child: None,
             stdin: None,
             engine_path: None,
             nnue_path: None,
             is_searching: false,
+            search_phase: SearchPhase::Idle,
+            phase_tx,
+            phase_rx,
             engine_name: "Pikafish".to_string(),
             engine_author: "the Pikafish developers".to_string(),
             current_search_id: 0,
@@ -390,6 +404,7 @@ pub async fn start_engine_internal(
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         let mut last_info_emit = Instant::now();
+        let mut last_emitted_depth: u32 = 0;
 
         while let Ok(Some(line)) = lines.next_line().await {
             let trimmed = line.trim();
@@ -449,11 +464,13 @@ pub async fn start_engine_internal(
                         if !active.aborted {
                             payload.search_id = active.search_id;
                             let now = Instant::now();
-                            // Throttle high-frequency info output: emit if 40ms elapsed or new depth
-                            if now.duration_since(last_info_emit) >= Duration::from_millis(40)
-                                || (payload.depth > 0 && !payload.pv.is_empty())
-                            {
+                            let is_new_depth = payload.depth > last_emitted_depth;
+                            // Throttle high-frequency info output: emit if 60ms elapsed or new depth
+                            if is_new_depth || now.duration_since(last_info_emit) >= Duration::from_millis(60) {
                                 last_info_emit = now;
+                                if is_new_depth {
+                                    last_emitted_depth = payload.depth;
+                                }
                                 let _ = app_clone.emit("engine-info", payload);
                             }
                         }
@@ -466,10 +483,14 @@ pub async fn start_engine_internal(
                     let mut st = shared_clone.lock().await;
                     let active_opt = st.active_search.take();
                     st.is_searching = false;
+                    st.search_phase = SearchPhase::Idle;
+                    let _ = st.phase_tx.send(SearchPhase::Idle);
                     let notify = st.stop_notify.clone();
                     drop(st);
 
-                    // Notify any thread waiting for the engine to stop
+                    last_emitted_depth = 0;
+
+                    // Notify any legacy thread waiting for the engine to stop
                     notify.notify_waiters();
 
                     if let Some(active) = active_opt {
@@ -494,6 +515,8 @@ pub async fn start_engine_internal(
         // When stdout ends, engine exited
         let mut st = shared_clone.lock().await;
         st.is_searching = false;
+        st.search_phase = SearchPhase::Idle;
+        let _ = st.phase_tx.send(SearchPhase::Idle);
         st.active_search = None;
         st.child = None;
         st.stdin = None;
@@ -623,6 +646,23 @@ pub fn parse_info_line(line: &str) -> Option<EngineInfoPayload> {
     })
 }
 
+pub async fn wait_for_idle(mut rx: watch::Receiver<SearchPhase>, timeout_dur: Duration) -> Result<(), &'static str> {
+    if *rx.borrow() == SearchPhase::Idle {
+        return Ok(());
+    }
+    let res = tokio::time::timeout(timeout_dur, async {
+        while *rx.borrow_and_update() != SearchPhase::Idle {
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    }).await;
+    match res {
+        Ok(_) => Ok(()),
+        Err(_) => Err("Timeout waiting for engine to become idle"),
+    }
+}
+
 pub async fn search_position_internal(
     shared: SharedEngine,
     fen: String,
@@ -633,29 +673,33 @@ pub async fn search_position_internal(
     depth: Option<u32>,
     is_ai_move: bool,
 ) -> Result<u64, String> {
-    // 1. If currently searching, cleanly abort and wait for old search to stop
-    let stop_notify = {
+    // 1. If currently searching or stopping, cleanly abort and wait for engine to reach Idle
+    let phase_rx = {
         let mut state = shared.lock().await;
-        if state.is_searching {
-            if let Some(ref mut active) = state.active_search {
-                active.aborted = true;
+        if state.search_phase != SearchPhase::Idle {
+            if state.search_phase == SearchPhase::Searching {
+                if let Some(ref mut active) = state.active_search {
+                    active.aborted = true;
+                }
+                if let Some(ref mut sin) = state.stdin {
+                    let _ = sin.write_all(b"stop\n").await;
+                    let _ = sin.flush().await;
+                }
+                state.search_phase = SearchPhase::Stopping;
+                let _ = state.phase_tx.send(SearchPhase::Stopping);
             }
-            if let Some(ref mut sin) = state.stdin {
-                let _ = sin.write_all(b"stop\n").await;
-                let _ = sin.flush().await;
-            }
-            Some(state.stop_notify.clone())
+            Some(state.phase_rx.clone())
         } else {
             None
         }
     };
 
-    if let Some(notify) = stop_notify {
-        // Wait up to 800ms for Pikafish to output bestmove for the stopped search
-        let _ = tokio::time::timeout(Duration::from_millis(800), notify.notified()).await;
+    if let Some(rx) = phase_rx {
+        // Wait up to 1500ms for Pikafish to output bestmove for the stopped search
+        let _ = wait_for_idle(rx, Duration::from_millis(1500)).await;
     }
 
-    // 2. Start new search on idle engine
+    // 2. Start new search on guaranteed idle engine
     let mut state = shared.lock().await;
     let search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
     state.current_search_id = search_id;
@@ -681,7 +725,14 @@ pub async fn search_position_internal(
             let n = limit_value.unwrap_or(100000);
             format!("go nodes {}\n", n)
         }
-        Some("infinite") => "go infinite\n".to_string(),
+        Some("infinite") => {
+            if is_ai_move {
+                // Safety: AI match moves must NEVER be infinite!
+                "go movetime 1500\n".to_string()
+            } else {
+                "go infinite\n".to_string()
+            }
+        }
         _ => {
             if let Some(ms) = movetime_ms {
                 format!("go movetime {}\n", ms)
@@ -702,28 +753,42 @@ pub async fn search_position_internal(
     sin.flush().await.map_err(|e| e.to_string())?;
 
     state.is_searching = true;
+    state.search_phase = SearchPhase::Searching;
     state.active_search = Some(ActiveSearch {
         search_id,
         is_ai_move,
         aborted: false,
     });
+    let _ = state.phase_tx.send(SearchPhase::Searching);
 
     Ok(search_id)
 }
 
 pub async fn stop_search_internal(shared: SharedEngine) -> Result<(), String> {
-    let mut state = shared.lock().await;
-    state.current_search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-    if let Some(ref mut active) = state.active_search {
-        active.aborted = true;
-    }
-    state.is_searching = false;
+    let phase_rx = {
+        let mut state = shared.lock().await;
+        if state.search_phase == SearchPhase::Searching {
+            if let Some(ref mut active) = state.active_search {
+                active.aborted = true;
+            }
+            if let Some(ref mut sin) = state.stdin {
+                let _ = sin.write_all(b"stop\n").await;
+                let _ = sin.flush().await;
+            }
+            state.search_phase = SearchPhase::Stopping;
+            let _ = state.phase_tx.send(SearchPhase::Stopping);
+            Some(state.phase_rx.clone())
+        } else if state.search_phase == SearchPhase::Stopping {
+            Some(state.phase_rx.clone())
+        } else {
+            None
+        }
+    };
 
-    if let Some(ref mut sin) = state.stdin {
-        let _ = sin.write_all(b"stop\n").await;
-        let _ = sin.flush().await;
+    if let Some(rx) = phase_rx {
+        let _ = wait_for_idle(rx, Duration::from_millis(1500)).await;
     }
-    state.stop_notify.notify_waiters();
+
     Ok(())
 }
 
@@ -802,6 +867,8 @@ pub async fn stop_engine_internal(shared: SharedEngine) -> Result<(), String> {
     }
     state.active_search = None;
     state.is_searching = false;
+    state.search_phase = SearchPhase::Idle;
+    let _ = state.phase_tx.send(SearchPhase::Idle);
 
     if let Some(ref mut sin) = state.stdin {
         let _ = sin.write_all(b"quit\n").await;

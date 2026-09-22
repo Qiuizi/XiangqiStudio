@@ -307,18 +307,24 @@ export const useGameStore = defineStore('game', () => {
 
       await listen<{ search_id: number; is_ai_move: boolean; bestmove: string }>('engine-bestmove', (e) => {
         const { bestmove, search_id, is_ai_move } = e.payload;
+
+        if (is_ai_move) {
+          if (isAiThinking.value && activeAiSearchId.value === search_id) {
+            clearAiWatchdog();
+            isAiThinking.value = false;
+            activeAiSearchId.value = null;
+            engineInfo.value.bestMove = bestmove;
+            executeAiMove(bestmove);
+          }
+          return;
+        }
+
+        // Live analysis candidate move
         if (currentSearchId.value && search_id !== currentSearchId.value) {
           return;
         }
         engineInfo.value.bestMove = bestmove;
         isAnalyzing.value = false;
-
-        if (is_ai_move && isAiThinking.value && activeAiSearchId.value === search_id) {
-          clearAiWatchdog();
-          isAiThinking.value = false;
-          activeAiSearchId.value = null;
-          executeAiMove(bestmove);
-        }
       });
 
       // Start engine process
@@ -342,6 +348,10 @@ export const useGameStore = defineStore('game', () => {
     const engineSettings = useEngineSettingsStore();
 
     if (isAiMoveRequest) {
+      // If background analysis is running, cleanly stop it first!
+      if (isAnalyzing.value) {
+        await stopAnalysis();
+      }
       isAiThinking.value = true;
       isAnalyzing.value = false;
       isEngineError.value = false;
@@ -359,16 +369,20 @@ export const useGameStore = defineStore('game', () => {
       let expectedTimeMs = 2000;
 
       if (isAiMoveRequest) {
+        // Enforce: AI match search MUST NEVER be infinite!
         searchType = engineSettings.matchSearchType;
+        if (searchType !== 'movetime' && searchType !== 'depth' && searchType !== 'nodes') {
+          searchType = 'movetime';
+        }
         if (searchType === 'movetime') {
-          limitValue = engineSettings.matchMovetimeMs;
-          expectedTimeMs = engineSettings.matchMovetimeMs;
+          limitValue = Math.max(500, engineSettings.matchMovetimeMs || 1500);
+          expectedTimeMs = limitValue;
         } else if (searchType === 'depth') {
-          limitValue = engineSettings.matchDepth;
-          expectedTimeMs = 10000;
+          limitValue = Math.max(1, engineSettings.matchDepth || 15);
+          expectedTimeMs = 12000;
         } else if (searchType === 'nodes') {
-          limitValue = engineSettings.matchNodes;
-          expectedTimeMs = 10000;
+          limitValue = Math.max(10000, engineSettings.matchNodes || 200000);
+          expectedTimeMs = 12000;
         }
       } else {
         searchType = engineSettings.analysisSearchType;
@@ -510,7 +524,9 @@ export const useGameStore = defineStore('game', () => {
         triggerAnalysis(true);
       }
     } else if (autoAnalysis.value || (gameMode.value === 'study' && isStudyAnalyzing.value)) {
-      triggerAnalysis(false);
+      if (!isAiThinking.value) {
+        triggerAnalysis(false);
+      }
     }
   }
 

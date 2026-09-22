@@ -72,7 +72,7 @@ export const useEngineSettingsStore = defineStore('engineSettings', () => {
 
   function loadFromStorage() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
       if (!raw) return;
       const data = JSON.parse(raw);
       if (typeof data.threads === 'number') threads.value = data.threads;
@@ -84,8 +84,16 @@ export const useEngineSettingsStore = defineStore('engineSettings', () => {
       if (typeof data.repetitionRule === 'string') repetitionRule.value = data.repetitionRule;
       if (typeof data.scoreType === 'string') scoreType.value = data.scoreType;
 
-      if (data.matchSearchType) matchSearchType.value = data.matchSearchType;
-      if (typeof data.matchMovetimeMs === 'number') matchMovetimeMs.value = data.matchMovetimeMs;
+      if (data.matchSearchType && ['movetime', 'depth', 'nodes'].includes(data.matchSearchType)) {
+        matchSearchType.value = data.matchSearchType;
+      } else {
+        matchSearchType.value = 'movetime';
+      }
+      if (typeof data.matchMovetimeMs === 'number' && data.matchMovetimeMs >= 500) {
+        matchMovetimeMs.value = data.matchMovetimeMs;
+      } else {
+        matchMovetimeMs.value = 1500;
+      }
       if (typeof data.matchDepth === 'number') matchDepth.value = data.matchDepth;
       if (typeof data.matchNodes === 'number') matchNodes.value = data.matchNodes;
 
@@ -126,7 +134,7 @@ export const useEngineSettingsStore = defineStore('engineSettings', () => {
 
         customOptions: customOptions.value,
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (e) {
       console.error('Failed to save engine settings to storage:', e);
     }

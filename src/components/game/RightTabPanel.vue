@@ -110,8 +110,8 @@
         <!-- 快速搜索配置工具条 (V0.3.1 常用参数快捷控制) -->
         <div class="quick-engine-ctrl">
           <div class="quick-row">
-            <span class="quick-label">模式</span>
-            <div class="quick-btn-group">
+            <span class="quick-label">分析模式</span>
+            <div class="quick-btn-group" title="设置右侧 AI 辅助分析的限制条件（对弈模式 AI 走子限制请在高级配置中调整）">
               <button 
                 class="quick-mode-btn" 
                 :class="{ active: engineSettings.analysisSearchType === 'infinite' }"
@@ -271,6 +271,8 @@
             <button 
               class="analysis-toggle-btn" 
               :class="{ 'is-stopping': gameStore.isAnalyzing }"
+              :disabled="gameStore.isAiThinking"
+              :title="gameStore.isAiThinking ? 'AI 正在对弈计算中，不可开启辅助分析' : ''"
               @click="toggleLiveAnalysis"
             >
               <Pause v-if="gameStore.isAnalyzing" :size="14" />
