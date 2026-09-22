@@ -1,0 +1,737 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::Mutex;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UciOptionMeta {
+    pub name: String,
+    pub option_type: String, // "spin", "check", "combo", "string", "button"
+    pub default: Option<String>,
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+    pub vars: Vec<String>,
+    pub current_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineInfoPayload {
+    pub search_id: u64,
+    pub depth: u32,
+    pub seldepth: Option<u32>,
+    pub score_cp: Option<i32>,
+    pub score_mate: Option<i32>,
+    pub nodes: Option<u64>,
+    pub nps: Option<u64>,
+    pub time_ms: Option<u64>,
+    pub hashfull: Option<u32>,
+    pub multipv: Option<u32>,
+    pub pv: Vec<String>,
+    pub cur_move: Option<String>,
+    pub cur_move_num: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineBestMovePayload {
+    pub search_id: u64,
+    pub is_ai_move: bool,
+    pub bestmove: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineStatusPayload {
+    pub ready: bool,
+    pub running: bool,
+    pub searching: bool,
+    pub engine_name: String,
+    pub engine_author: String,
+    pub engine_path: String,
+    pub nnue_path: String,
+    pub options_count: usize,
+}
+
+pub struct EngineState {
+    pub child: Option<Child>,
+    pub stdin: Option<ChildStdin>,
+    pub engine_path: Option<PathBuf>,
+    pub nnue_path: Option<PathBuf>,
+    pub is_searching: bool,
+    pub engine_name: String,
+    pub engine_author: String,
+    pub current_search_id: u64,
+    pub search_in_flight: Option<u64>,
+    pub current_is_ai_move: bool,
+    pub options: Vec<UciOptionMeta>,
+    pub current_options_map: HashMap<String, String>,
+}
+
+pub type SharedEngine = Arc<Mutex<EngineState>>;
+
+static SEARCH_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+impl EngineState {
+    pub fn new() -> Self {
+        Self {
+            child: None,
+            stdin: None,
+            engine_path: None,
+            nnue_path: None,
+            is_searching: false,
+            engine_name: "Pikafish".to_string(),
+            engine_author: "the Pikafish developers".to_string(),
+            current_search_id: 0,
+            search_in_flight: None,
+            current_is_ai_move: false,
+            options: Vec::new(),
+            current_options_map: HashMap::new(),
+        }
+    }
+
+    pub fn get_status(&self, app: Option<&AppHandle>) -> EngineStatusPayload {
+        let path_str = self
+            .engine_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .or_else(|| find_pikafish_executable(app).map(|p| p.to_string_lossy().to_string()))
+            .unwrap_or_default();
+
+        let nnue_str = self
+            .nnue_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        EngineStatusPayload {
+            ready: self.stdin.is_some(),
+            running: self.child.is_some(),
+            searching: self.is_searching,
+            engine_name: self.engine_name.clone(),
+            engine_author: self.engine_author.clone(),
+            engine_path: path_str,
+            nnue_path: nnue_str,
+            options_count: self.options.len(),
+        }
+    }
+}
+
+pub fn clean_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy().to_string();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        p
+    }
+}
+
+pub fn find_pikafish_executable(app: Option<&AppHandle>) -> Option<PathBuf> {
+    let engine_names = [
+        "pikafish-bmi2.exe",
+        "pikafish-avx2.exe",
+        "pikafish-avx512.exe",
+        "pikafish-sse41-popcnt.exe",
+        "pikafish.exe",
+    ];
+
+    // 1. Check Tauri resource directory if packaged
+    if let Some(handle) = app {
+        if let Ok(res_dir) = handle.path().resource_dir() {
+            for name in &engine_names {
+                let candidates = [
+                    res_dir.join(name),
+                    res_dir.join("resources").join(name),
+                    res_dir.join("resources").join("pikafish").join(name),
+                    res_dir.join("bin").join(name),
+                ];
+                for cand in &candidates {
+                    if cand.exists() {
+                        return Some(clean_path(cand.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check current executable directory and walk up 5 parent levels
+    if let Ok(exe_path) = std::env::current_exe() {
+        let mut cur = exe_path.parent();
+        for _ in 0..5 {
+            if let Some(p) = cur {
+                for name in &engine_names {
+                    let candidates = [
+                        p.join("resources").join(name),
+                        p.join("resources").join("pikafish").join(name),
+                        p.join("src-tauri").join("resources").join(name),
+                        p.join(name),
+                        p.join("bin").join(name),
+                    ];
+                    for cand in &candidates {
+                        if cand.exists() {
+                            if let Ok(abs) = std::fs::canonicalize(cand) {
+                                return Some(clean_path(abs));
+                            }
+                            return Some(clean_path(cand.clone()));
+                        }
+                    }
+                }
+                cur = p.parent();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 3. Check current working directory and walk up 5 parent levels
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut cur = Some(cwd.as_path());
+        for _ in 0..5 {
+            if let Some(p) = cur {
+                for name in &engine_names {
+                    let candidates = [
+                        p.join("resources").join(name),
+                        p.join("resources").join("pikafish").join(name),
+                        p.join("src-tauri").join("resources").join(name),
+                        p.join(name),
+                    ];
+                    for cand in &candidates {
+                        if cand.exists() {
+                            if let Ok(abs) = std::fs::canonicalize(cand) {
+                                return Some(clean_path(abs));
+                            }
+                            return Some(clean_path(cand.clone()));
+                        }
+                    }
+                }
+                cur = p.parent();
+            } else {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+pub fn parse_uci_option(line: &str) -> Option<UciOptionMeta> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("option name ") {
+        return None;
+    }
+    let rest = &trimmed["option name ".len()..];
+    let type_idx = rest.find(" type ")?;
+    let name = rest[..type_idx].trim().to_string();
+    let after_type = &rest[type_idx + " type ".len()..];
+    let tokens: Vec<&str> = after_type.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let option_type = tokens[0].to_string();
+    let mut default = None;
+    let mut min = None;
+    let mut max = None;
+    let mut vars = Vec::new();
+
+    let mut i = 1;
+    while i < tokens.len() {
+        match tokens[i] {
+            "default" => {
+                if i + 1 < tokens.len() {
+                    let mut def_parts = Vec::new();
+                    let mut j = i + 1;
+                    while j < tokens.len()
+                        && tokens[j] != "min"
+                        && tokens[j] != "max"
+                        && tokens[j] != "var"
+                    {
+                        def_parts.push(tokens[j]);
+                        j += 1;
+                    }
+                    default = Some(def_parts.join(" "));
+                    i = j;
+                    continue;
+                }
+            }
+            "min" => {
+                if i + 1 < tokens.len() {
+                    min = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "max" => {
+                if i + 1 < tokens.len() {
+                    max = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "var" => {
+                if i + 1 < tokens.len() {
+                    vars.push(tokens[i + 1].to_string());
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    Some(UciOptionMeta {
+        name,
+        option_type,
+        default,
+        min,
+        max,
+        vars,
+        current_value: None,
+    })
+}
+
+pub async fn start_engine_internal(
+    app: AppHandle,
+    shared: SharedEngine,
+    custom_path: Option<String>,
+) -> Result<String, String> {
+    let mut state = shared.lock().await;
+
+    // If already running, stop it first
+    if let Some(mut child) = state.child.take() {
+        let _ = child.kill().await;
+    }
+    state.stdin = None;
+    state.is_searching = false;
+    state.options.clear();
+
+    let target_path = clean_path(if let Some(cp) = custom_path {
+        PathBuf::from(cp)
+    } else {
+        find_pikafish_executable(Some(&app))
+            .ok_or_else(|| "未找到皮卡鱼 (Pikafish) 可执行文件。请检查是否有 pikafish-bmi2.exe 或 pikafish-avx2.exe".to_string())?
+    });
+
+    if !target_path.exists() {
+        return Err(format!("引擎文件不存在: {:?}", target_path));
+    }
+
+    let work_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
+
+    // Look for pikafish.nnue in engine directory
+    let nnue_candidate = work_dir.join("pikafish.nnue");
+    if nnue_candidate.exists() {
+        state.nnue_path = Some(clean_path(nnue_candidate));
+    } else {
+        state.nnue_path = None;
+    }
+
+    let mut std_cmd = std::process::Command::new(&target_path);
+    std_cmd.current_dir(work_dir);
+    std_cmd.stdin(Stdio::piped());
+    std_cmd.stdout(Stdio::piped());
+    std_cmd.stderr(Stdio::null());
+
+    #[cfg(windows)]
+    std_cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = Command::from(std_cmd)
+        .spawn()
+        .map_err(|e| format!("启动皮卡鱼失败: {}", e))?;
+
+    let stdin = child.stdin.take().ok_or("无法获取引擎 stdin")?;
+    let stdout = child.stdout.take().ok_or("无法获取引擎 stdout")?;
+
+    state.child = Some(child);
+    state.stdin = Some(stdin);
+    state.engine_path = Some(target_path.clone());
+
+    // Send UCI handshake
+    if let Some(ref mut sin) = state.stdin {
+        let _ = sin.write_all(b"uci\n").await;
+        let _ = sin.flush().await;
+    }
+
+    // Spawn background reader loop
+    let shared_clone = shared.clone();
+    let app_clone = app.clone();
+
+    tokio::spawn(async move {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if trimmed.starts_with("id name ") {
+                let name = trimmed.trim_start_matches("id name ").to_string();
+                let mut st = shared_clone.lock().await;
+                st.engine_name = name.clone();
+                let _ = app_clone.emit("engine-name", name);
+            } else if trimmed.starts_with("id author ") {
+                let author = trimmed.trim_start_matches("id author ").to_string();
+                let mut st = shared_clone.lock().await;
+                st.engine_author = author.clone();
+            } else if trimmed.starts_with("option name ") {
+                if let Some(meta) = parse_uci_option(trimmed) {
+                    let mut st = shared_clone.lock().await;
+                    st.options.push(meta);
+                }
+            } else if trimmed == "uciok" {
+                let mut st = shared_clone.lock().await;
+                let options_clone = st.options.clone();
+                let has_nnue = st.nnue_path.is_some();
+                let saved_options = st.current_options_map.clone();
+
+                let _ = app_clone.emit("engine-options", options_clone);
+
+                if let Some(ref mut sin) = st.stdin {
+                    // Set NNUE file if found
+                    if has_nnue {
+                        let _ = sin.write_all(b"setoption name EvalFile value pikafish.nnue\n").await;
+                    }
+                    // Apply any saved options
+                    for (k, v) in saved_options {
+                        let cmd = if v.is_empty() {
+                            format!("setoption name {}\n", k)
+                        } else {
+                            format!("setoption name {} value {}\n", k, v)
+                        };
+                        let _ = sin.write_all(cmd.as_bytes()).await;
+                    }
+                    let _ = sin.write_all(b"isready\n").await;
+                    let _ = sin.flush().await;
+                }
+            } else if trimmed == "readyok" {
+                // True readiness after NNUE and hash table are initialized
+                let _ = app_clone.emit("engine-ready", true);
+            } else if trimmed.starts_with("info ") {
+                let st = shared_clone.lock().await;
+                let search_id = st.current_search_id;
+                let is_searching = st.is_searching;
+                let in_flight = st.search_in_flight;
+                drop(st);
+
+                // Only process info if it belongs to the currently active in-flight search
+                if is_searching && in_flight == Some(search_id) {
+                    if let Some(mut payload) = parse_info_line(trimmed) {
+                        payload.search_id = search_id;
+                        let _ = app_clone.emit("engine-info", payload);
+                    }
+                }
+            } else if trimmed.starts_with("bestmove ") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let bestmove = parts[1].to_string();
+                    let mut st = shared_clone.lock().await;
+                    let completed_id = st.search_in_flight.take();
+                    let current_id = st.current_search_id;
+                    let is_ai_move = st.current_is_ai_move;
+                    st.is_searching = false;
+
+                    // Only emit bestmove if it belongs to the current active search!
+                    if completed_id == Some(current_id) {
+                        let payload = EngineBestMovePayload {
+                            search_id: current_id,
+                            is_ai_move,
+                            bestmove,
+                        };
+                        let _ = app_clone.emit("engine-bestmove", payload);
+                    }
+                }
+            }
+        }
+
+        // When stdout ends, engine exited
+        let mut st = shared_clone.lock().await;
+        st.is_searching = false;
+        st.child = None;
+        st.stdin = None;
+        let _ = app_clone.emit("engine-status", "stopped");
+    });
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
+pub fn parse_info_line(line: &str) -> Option<EngineInfoPayload> {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.is_empty() || tokens[0] != "info" {
+        return None;
+    }
+
+    let mut depth = 0;
+    let mut seldepth = None;
+    let mut multipv = None;
+    let mut score_cp = None;
+    let mut score_mate = None;
+    let mut nodes: Option<u64> = None;
+    let mut nps: Option<u64> = None;
+    let mut time_ms = None;
+    let mut hashfull = None;
+    let mut pv = Vec::new();
+    let mut cur_move = None;
+    let mut cur_move_num = None;
+
+    let mut i = 1;
+    while i < tokens.len() {
+        match tokens[i] {
+            "depth" => {
+                if i + 1 < tokens.len() {
+                    depth = tokens[i + 1].parse().unwrap_or(0);
+                    i += 1;
+                }
+            }
+            "seldepth" => {
+                if i + 1 < tokens.len() {
+                    seldepth = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "multipv" => {
+                if i + 1 < tokens.len() {
+                    multipv = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "score" => {
+                if i + 2 < tokens.len() {
+                    let kind = tokens[i + 1];
+                    let val: i32 = tokens[i + 2].parse().unwrap_or(0);
+                    if kind == "cp" {
+                        score_cp = Some(val);
+                    } else if kind == "mate" {
+                        score_mate = Some(val);
+                    }
+                    i += 2;
+                }
+            }
+            "nodes" => {
+                if i + 1 < tokens.len() {
+                    nodes = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "nps" => {
+                if i + 1 < tokens.len() {
+                    nps = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "time" => {
+                if i + 1 < tokens.len() {
+                    time_ms = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "hashfull" => {
+                if i + 1 < tokens.len() {
+                    hashfull = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "currmove" => {
+                if i + 1 < tokens.len() {
+                    cur_move = Some(tokens[i + 1].to_string());
+                    i += 1;
+                }
+            }
+            "currmovenumber" => {
+                if i + 1 < tokens.len() {
+                    cur_move_num = tokens[i + 1].parse().ok();
+                    i += 1;
+                }
+            }
+            "pv" => {
+                for &m in &tokens[i + 1..] {
+                    pv.push(m.to_string());
+                }
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    Some(EngineInfoPayload {
+        search_id: 0,
+        depth,
+        seldepth,
+        score_cp,
+        score_mate,
+        nodes,
+        nps,
+        time_ms,
+        hashfull,
+        multipv,
+        pv,
+        cur_move,
+        cur_move_num,
+    })
+}
+
+pub async fn search_position_internal(
+    shared: SharedEngine,
+    fen: String,
+    moves: Vec<String>,
+    search_type: Option<String>,
+    limit_value: Option<u64>,
+    movetime_ms: Option<u64>,
+    depth: Option<u32>,
+    is_ai_move: bool,
+) -> Result<u64, String> {
+    let mut state = shared.lock().await;
+    let was_searching = state.is_searching;
+
+    let search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
+    state.current_search_id = search_id;
+    state.current_is_ai_move = is_ai_move;
+
+    let sin = state.stdin.as_mut().ok_or("引擎未运行")?;
+
+    // Stop current search if searching
+    if was_searching {
+        let _ = sin.write_all(b"stop\n").await;
+        let _ = sin.flush().await;
+    }
+
+    let pos_cmd = if moves.is_empty() {
+        format!("position fen {}\n", fen)
+    } else {
+        format!("position fen {} moves {}\n", fen, moves.join(" "))
+    };
+
+    let go_cmd = match search_type.as_deref() {
+        Some("movetime") => {
+            let ms = limit_value.or(movetime_ms).unwrap_or(1000);
+            format!("go movetime {}\n", ms)
+        }
+        Some("depth") => {
+            let d = limit_value.map(|v| v as u32).or(depth).unwrap_or(15);
+            format!("go depth {}\n", d)
+        }
+        Some("nodes") => {
+            let n = limit_value.unwrap_or(100000);
+            format!("go nodes {}\n", n)
+        }
+        Some("infinite") => "go infinite\n".to_string(),
+        _ => {
+            // Fallback
+            if let Some(ms) = movetime_ms {
+                format!("go movetime {}\n", ms)
+            } else if let Some(d) = depth {
+                format!("go depth {}\n", d)
+            } else {
+                "go movetime 1000\n".to_string()
+            }
+        }
+    };
+
+    sin.write_all(pos_cmd.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    sin.write_all(go_cmd.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    sin.flush().await.map_err(|e| e.to_string())?;
+
+    state.is_searching = true;
+    state.search_in_flight = Some(search_id);
+    Ok(search_id)
+}
+
+pub async fn stop_search_internal(shared: SharedEngine) -> Result<(), String> {
+    let mut state = shared.lock().await;
+    state.current_search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
+    state.current_is_ai_move = false;
+    state.search_in_flight = None;
+
+    if let Some(ref mut sin) = state.stdin {
+        let _ = sin.write_all(b"stop\n").await;
+        let _ = sin.flush().await;
+    }
+    state.is_searching = false;
+    Ok(())
+}
+
+pub async fn set_engine_options_internal(
+    shared: SharedEngine,
+    options: Vec<(String, String)>,
+) -> Result<(), String> {
+    let mut state = shared.lock().await;
+
+    // Stop searching first if currently active
+    if state.is_searching {
+        if let Some(ref mut sin) = state.stdin {
+            let _ = sin.write_all(b"stop\n").await;
+            let _ = sin.flush().await;
+        }
+        state.is_searching = false;
+        state.current_search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
+        state.search_in_flight = None;
+    }
+
+    let mut commands = Vec::new();
+    for (name, val) in options {
+        let cmd = if val.is_empty() {
+            format!("setoption name {}\n", name)
+        } else {
+            format!("setoption name {} value {}\n", name, val)
+        };
+        commands.push(cmd);
+        state.current_options_map.insert(name.clone(), val.clone());
+        if let Some(opt) = state.options.iter_mut().find(|o| o.name == name) {
+            opt.current_value = Some(val);
+        }
+    }
+
+    let sin = state.stdin.as_mut().ok_or("引擎未运行")?;
+    for cmd in commands {
+        sin.write_all(cmd.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    sin.write_all(b"isready\n").await.map_err(|e| e.to_string())?;
+    sin.flush().await.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+pub async fn get_engine_options_internal(shared: SharedEngine) -> Result<Vec<UciOptionMeta>, String> {
+    let state = shared.lock().await;
+    Ok(state.options.clone())
+}
+
+pub async fn restart_engine_internal(
+    app: AppHandle,
+    shared: SharedEngine,
+    custom_path: Option<String>,
+) -> Result<String, String> {
+    stop_engine_internal(shared.clone()).await?;
+    start_engine_internal(app, shared, custom_path).await
+}
+
+pub async fn stop_engine_internal(shared: SharedEngine) -> Result<(), String> {
+    let mut state = shared.lock().await;
+    state.current_search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
+    state.current_is_ai_move = false;
+
+    if let Some(ref mut sin) = state.stdin {
+        let _ = sin.write_all(b"quit\n").await;
+        let _ = sin.flush().await;
+    }
+    if let Some(mut child) = state.child.take() {
+        let _ = child.kill().await;
+    }
+    state.stdin = None;
+    state.is_searching = false;
+    Ok(())
+}
