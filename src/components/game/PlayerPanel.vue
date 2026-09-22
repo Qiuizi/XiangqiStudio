@@ -85,6 +85,25 @@
     </div>
 
     <!-- 3. 底部区域：对局功能操作（主次分级清晰） -->
+    <!-- 2.5 引擎异常恢复提示卡 (V0.3.3 防锁死专设) -->
+    <div v-if="gameStore.isEngineError" class="engine-error-box">
+      <div class="error-header">
+        <AlertTriangle :size="15" class="error-icon" />
+        <span class="error-title">AI 引擎未响应 / 异常</span>
+      </div>
+      <p class="error-desc">{{ gameStore.engineErrorMsg || '引擎搜索中断，当前局面已完好保留' }}</p>
+      <div class="error-actions-group">
+        <button class="error-btn retry-btn" @click="gameStore.retryAiMove">
+          <Play :size="13" />
+          <span>重试走棋</span>
+        </button>
+        <button class="error-btn restart-btn" @click="gameStore.restartEngineAndResume">
+          <RefreshCw :size="13" />
+          <span>重启引擎</span>
+        </button>
+      </div>
+    </div>
+
     <div class="actions-container">
       <!-- 第一行：常用对弈交互功能（悔棋、走法指引、翻转棋盘） -->
       <div class="primary-actions-row">
@@ -228,7 +247,7 @@
 import { ref, computed } from 'vue';
 import { 
   Undo2, ArrowUpDown, Lightbulb, Swords, 
-  RotateCcw, Flag 
+  RotateCcw, Flag, AlertTriangle, RefreshCw, Play
 } from 'lucide-vue-next';
 import { useGameStore, type GameMode } from '../../stores/gameStore';
 import type { PieceColor } from '../../core/chess/types';
@@ -242,6 +261,9 @@ const selectedTime = ref<number>(1000);
 
 // 对局状态计算与文案判定
 const matchStatusText = computed(() => {
+  if (gameStore.isEngineError) {
+    return '引擎异常';
+  }
   const over = gameStore.board.isGameOver();
   if (over.isOver) {
     return over.winner === 'red' ? '红方获胜' : over.winner === 'black' ? '黑方获胜' : '和棋';
@@ -256,6 +278,7 @@ const matchStatusText = computed(() => {
 });
 
 const matchStatusBadgeClass = computed(() => {
+  if (gameStore.isEngineError) return 'badge-error';
   const over = gameStore.board.isGameOver();
   if (over.isOver) return 'badge-win';
   if (gameStore.board.isInCheck()) return 'badge-check';
@@ -788,4 +811,86 @@ function handleResign() {
   0% { transform: scale(1); }
   100% { transform: scale(1.05); }
 }
+
+/* 引擎异常恢复面板 (V0.3.3) */
+.engine-error-box {
+  background: rgba(85, 20, 15, 0.9);
+  border: 1px solid #d32f2f;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 4px 12px rgba(211, 47, 47, 0.3);
+}
+
+.error-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #ffb4a2;
+}
+
+.error-icon {
+  color: #ff5252;
+}
+
+.error-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.error-desc {
+  margin: 0;
+  font-size: 12px;
+  color: #ffcdd2;
+  line-height: 1.4;
+}
+
+.error-actions-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.error-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.error-btn.retry-btn {
+  background: #d4af37;
+  color: #1a0f07;
+}
+
+.error-btn.retry-btn:hover {
+  background: #e6c558;
+}
+
+.error-btn.restart-btn {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.error-btn.restart-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.status-badge.badge-error {
+  background: rgba(211, 47, 47, 0.2);
+  color: #ff5252;
+  border-color: rgba(211, 47, 47, 0.5);
+}
+
 </style>

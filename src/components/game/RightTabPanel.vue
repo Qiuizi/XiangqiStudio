@@ -98,8 +98,8 @@
             <span class="engine-title">{{ gameStore.engineName }}</span>
           </div>
           <div class="engine-header-right">
-            <span class="engine-status-pill" :class="{ running: gameStore.isAiThinking || gameStore.isAnalyzing }">
-              {{ gameStore.isAiThinking ? 'AI 思考中' : gameStore.isAnalyzing ? '实时解算中' : '计算就绪' }}
+            <span class="engine-status-pill" :class="{ running: gameStore.isAiThinking || gameStore.isAnalyzing, error: gameStore.isEngineError }">
+              {{ gameStore.isEngineError ? '引擎异常' : gameStore.isAiThinking ? 'AI 思考中' : gameStore.isAnalyzing ? '实时解算中' : '计算就绪' }}
             </span>
             <button class="settings-gear-btn" title="打开引擎高级配置" @click="showSettingsModal = true">
               <Settings :size="14" />
@@ -1129,4 +1129,11 @@ function loadCustomFen() {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
+
+.engine-status-pill.error {
+  background: rgba(211, 47, 47, 0.2);
+  color: #ff5252;
+  border-color: rgba(211, 47, 47, 0.5);
+}
+
 </style>

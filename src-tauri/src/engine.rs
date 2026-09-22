@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -62,6 +63,13 @@ pub struct EngineStatusPayload {
     pub options_count: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveSearch {
+    pub search_id: u64,
+    pub is_ai_move: bool,
+    pub aborted: bool,
+}
+
 pub struct EngineState {
     pub child: Option<Child>,
     pub stdin: Option<ChildStdin>,
@@ -71,8 +79,8 @@ pub struct EngineState {
     pub engine_name: String,
     pub engine_author: String,
     pub current_search_id: u64,
-    pub search_in_flight: Option<u64>,
-    pub current_is_ai_move: bool,
+    pub active_search: Option<ActiveSearch>,
+    pub stop_notify: Arc<Notify>,
     pub options: Vec<UciOptionMeta>,
     pub current_options_map: HashMap<String, String>,
 }
@@ -92,8 +100,8 @@ impl EngineState {
             engine_name: "Pikafish".to_string(),
             engine_author: "the Pikafish developers".to_string(),
             current_search_id: 0,
-            search_in_flight: None,
-            current_is_ai_move: false,
+            active_search: None,
+            stop_notify: Arc::new(Notify::new()),
             options: Vec::new(),
             current_options_map: HashMap::new(),
         }
@@ -128,7 +136,7 @@ impl EngineState {
 
 pub fn clean_path(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy().to_string();
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+    if let Some(stripped) = s.strip_prefix(r"\\?\\") {
         PathBuf::from(stripped)
     } else {
         p
@@ -309,13 +317,14 @@ pub async fn start_engine_internal(
     }
     state.stdin = None;
     state.is_searching = false;
+    state.active_search = None;
     state.options.clear();
 
     let target_path = clean_path(if let Some(cp) = custom_path {
         PathBuf::from(cp)
     } else {
         find_pikafish_executable(Some(&app))
-            .ok_or_else(|| "未找到皮卡鱼 (Pikafish) 可执行文件。请检查是否有 pikafish-bmi2.exe 或 pikafish-avx2.exe".to_string())?
+            .ok_or_else(|| "未找到皮卡鱼 (Pikafish) 可执行文件，请检查 resources/ 目录".to_string())?
     });
 
     if !target_path.exists() {
@@ -336,7 +345,7 @@ pub async fn start_engine_internal(
     std_cmd.current_dir(work_dir);
     std_cmd.stdin(Stdio::piped());
     std_cmd.stdout(Stdio::piped());
-    std_cmd.stderr(Stdio::null());
+    std_cmd.stderr(Stdio::piped());
 
     #[cfg(windows)]
     std_cmd.creation_flags(CREATE_NO_WINDOW);
@@ -347,6 +356,7 @@ pub async fn start_engine_internal(
 
     let stdin = child.stdin.take().ok_or("无法获取引擎 stdin")?;
     let stdout = child.stdout.take().ok_or("无法获取引擎 stdout")?;
+    let stderr = child.stderr.take();
 
     state.child = Some(child);
     state.stdin = Some(stdin);
@@ -358,13 +368,28 @@ pub async fn start_engine_internal(
         let _ = sin.flush().await;
     }
 
-    // Spawn background reader loop
+    // Spawn stderr background reader
+    if let Some(err_pipe) = stderr {
+        tokio::spawn(async move {
+            let reader = BufReader::new(err_pipe);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    eprintln!("[Pikafish stderr] {}", trimmed);
+                }
+            }
+        });
+    }
+
+    // Spawn background reader loop for stdout
     let shared_clone = shared.clone();
     let app_clone = app.clone();
 
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
+        let mut last_info_emit = Instant::now();
 
         while let Ok(Some(line)) = lines.next_line().await {
             let trimmed = line.trim();
@@ -415,17 +440,23 @@ pub async fn start_engine_internal(
                 // True readiness after NNUE and hash table are initialized
                 let _ = app_clone.emit("engine-ready", true);
             } else if trimmed.starts_with("info ") {
-                let st = shared_clone.lock().await;
-                let search_id = st.current_search_id;
-                let is_searching = st.is_searching;
-                let in_flight = st.search_in_flight;
-                drop(st);
+                if let Some(mut payload) = parse_info_line(trimmed) {
+                    let st = shared_clone.lock().await;
+                    let active_opt = st.active_search.clone();
+                    drop(st);
 
-                // Only process info if it belongs to the currently active in-flight search
-                if is_searching && in_flight == Some(search_id) {
-                    if let Some(mut payload) = parse_info_line(trimmed) {
-                        payload.search_id = search_id;
-                        let _ = app_clone.emit("engine-info", payload);
+                    if let Some(active) = active_opt {
+                        if !active.aborted {
+                            payload.search_id = active.search_id;
+                            let now = Instant::now();
+                            // Throttle high-frequency info output: emit if 40ms elapsed or new depth
+                            if now.duration_since(last_info_emit) >= Duration::from_millis(40)
+                                || (payload.depth > 0 && !payload.pv.is_empty())
+                            {
+                                last_info_emit = now;
+                                let _ = app_clone.emit("engine-info", payload);
+                            }
+                        }
                     }
                 }
             } else if trimmed.starts_with("bestmove ") {
@@ -433,19 +464,28 @@ pub async fn start_engine_internal(
                 if parts.len() >= 2 {
                     let bestmove = parts[1].to_string();
                     let mut st = shared_clone.lock().await;
-                    let completed_id = st.search_in_flight.take();
-                    let current_id = st.current_search_id;
-                    let is_ai_move = st.current_is_ai_move;
+                    let active_opt = st.active_search.take();
                     st.is_searching = false;
+                    let notify = st.stop_notify.clone();
+                    drop(st);
 
-                    // Only emit bestmove if it belongs to the current active search!
-                    if completed_id == Some(current_id) {
-                        let payload = EngineBestMovePayload {
-                            search_id: current_id,
-                            is_ai_move,
-                            bestmove,
-                        };
-                        let _ = app_clone.emit("engine-bestmove", payload);
+                    // Notify any thread waiting for the engine to stop
+                    notify.notify_waiters();
+
+                    if let Some(active) = active_opt {
+                        if !active.aborted {
+                            let payload = EngineBestMovePayload {
+                                search_id: active.search_id,
+                                is_ai_move: active.is_ai_move,
+                                bestmove,
+                            };
+                            let _ = app_clone.emit("engine-bestmove", payload);
+                        } else {
+                            eprintln!(
+                                "[UCI Lifecycle] Discarded bestmove '{}' for aborted search ID {}",
+                                bestmove, active.search_id
+                            );
+                        }
                     }
                 }
             }
@@ -454,8 +494,13 @@ pub async fn start_engine_internal(
         // When stdout ends, engine exited
         let mut st = shared_clone.lock().await;
         st.is_searching = false;
+        st.active_search = None;
         st.child = None;
         st.stdin = None;
+        let notify = st.stop_notify.clone();
+        drop(st);
+
+        notify.notify_waiters();
         let _ = app_clone.emit("engine-status", "stopped");
     });
 
@@ -588,20 +633,34 @@ pub async fn search_position_internal(
     depth: Option<u32>,
     is_ai_move: bool,
 ) -> Result<u64, String> {
-    let mut state = shared.lock().await;
-    let was_searching = state.is_searching;
+    // 1. If currently searching, cleanly abort and wait for old search to stop
+    let stop_notify = {
+        let mut state = shared.lock().await;
+        if state.is_searching {
+            if let Some(ref mut active) = state.active_search {
+                active.aborted = true;
+            }
+            if let Some(ref mut sin) = state.stdin {
+                let _ = sin.write_all(b"stop\n").await;
+                let _ = sin.flush().await;
+            }
+            Some(state.stop_notify.clone())
+        } else {
+            None
+        }
+    };
 
+    if let Some(notify) = stop_notify {
+        // Wait up to 800ms for Pikafish to output bestmove for the stopped search
+        let _ = tokio::time::timeout(Duration::from_millis(800), notify.notified()).await;
+    }
+
+    // 2. Start new search on idle engine
+    let mut state = shared.lock().await;
     let search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
     state.current_search_id = search_id;
-    state.current_is_ai_move = is_ai_move;
 
-    let sin = state.stdin.as_mut().ok_or("引擎未运行")?;
-
-    // Stop current search if searching
-    if was_searching {
-        let _ = sin.write_all(b"stop\n").await;
-        let _ = sin.flush().await;
-    }
+    let sin = state.stdin.as_mut().ok_or("引擎未就绪")?;
 
     let pos_cmd = if moves.is_empty() {
         format!("position fen {}\n", fen)
@@ -624,7 +683,6 @@ pub async fn search_position_internal(
         }
         Some("infinite") => "go infinite\n".to_string(),
         _ => {
-            // Fallback
             if let Some(ms) = movetime_ms {
                 format!("go movetime {}\n", ms)
             } else if let Some(d) = depth {
@@ -644,21 +702,28 @@ pub async fn search_position_internal(
     sin.flush().await.map_err(|e| e.to_string())?;
 
     state.is_searching = true;
-    state.search_in_flight = Some(search_id);
+    state.active_search = Some(ActiveSearch {
+        search_id,
+        is_ai_move,
+        aborted: false,
+    });
+
     Ok(search_id)
 }
 
 pub async fn stop_search_internal(shared: SharedEngine) -> Result<(), String> {
     let mut state = shared.lock().await;
     state.current_search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-    state.current_is_ai_move = false;
-    state.search_in_flight = None;
+    if let Some(ref mut active) = state.active_search {
+        active.aborted = true;
+    }
+    state.is_searching = false;
 
     if let Some(ref mut sin) = state.stdin {
         let _ = sin.write_all(b"stop\n").await;
         let _ = sin.flush().await;
     }
-    state.is_searching = false;
+    state.stop_notify.notify_waiters();
     Ok(())
 }
 
@@ -666,19 +731,29 @@ pub async fn set_engine_options_internal(
     shared: SharedEngine,
     options: Vec<(String, String)>,
 ) -> Result<(), String> {
-    let mut state = shared.lock().await;
-
     // Stop searching first if currently active
-    if state.is_searching {
-        if let Some(ref mut sin) = state.stdin {
-            let _ = sin.write_all(b"stop\n").await;
-            let _ = sin.flush().await;
+    let stop_notify = {
+        let mut state = shared.lock().await;
+        if state.is_searching {
+            if let Some(ref mut active) = state.active_search {
+                active.aborted = true;
+            }
+            if let Some(ref mut sin) = state.stdin {
+                let _ = sin.write_all(b"stop\n").await;
+                let _ = sin.flush().await;
+            }
+            state.is_searching = false;
+            Some(state.stop_notify.clone())
+        } else {
+            None
         }
-        state.is_searching = false;
-        state.current_search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-        state.search_in_flight = None;
+    };
+
+    if let Some(notify) = stop_notify {
+        let _ = tokio::time::timeout(Duration::from_millis(500), notify.notified()).await;
     }
 
+    let mut state = shared.lock().await;
     let mut commands = Vec::new();
     for (name, val) in options {
         let cmd = if val.is_empty() {
@@ -693,7 +768,7 @@ pub async fn set_engine_options_internal(
         }
     }
 
-    let sin = state.stdin.as_mut().ok_or("引擎未运行")?;
+    let sin = state.stdin.as_mut().ok_or("引擎未就绪")?;
     for cmd in commands {
         sin.write_all(cmd.as_bytes())
             .await
@@ -722,7 +797,11 @@ pub async fn restart_engine_internal(
 pub async fn stop_engine_internal(shared: SharedEngine) -> Result<(), String> {
     let mut state = shared.lock().await;
     state.current_search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-    state.current_is_ai_move = false;
+    if let Some(ref mut active) = state.active_search {
+        active.aborted = true;
+    }
+    state.active_search = None;
+    state.is_searching = false;
 
     if let Some(ref mut sin) = state.stdin {
         let _ = sin.write_all(b"quit\n").await;
@@ -732,6 +811,6 @@ pub async fn stop_engine_internal(shared: SharedEngine) -> Result<(), String> {
         let _ = child.kill().await;
     }
     state.stdin = None;
-    state.is_searching = false;
+    state.stop_notify.notify_waiters();
     Ok(())
 }

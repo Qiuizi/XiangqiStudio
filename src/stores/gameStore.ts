@@ -5,10 +5,12 @@ import { listen } from '@tauri-apps/api/event';
 import { XiangqiBoard } from '../core/chess/board';
 import { sound } from '../core/sound';
 import { INITIAL_FEN, parseUciMove } from '../core/chess/fen';
-import type { PieceColor, Position } from '../core/chess/types';
+import type { PieceColor, PieceType, Position } from '../core/chess/types';
 import { useEngineSettingsStore, type UciOptionMeta } from './engineSettingsStore';
 
 export type GameMode = 'pve' | 'pvp' | 'study' | 'replay';
+export type StudySubMode = 'manual' | 'battle' | 'edit';
+export type MatchStatus = 'user_turn' | 'ai_thinking' | 'engine_error' | 'game_over';
 
 export interface MultiPvLine {
   multipv: number;
@@ -51,6 +53,7 @@ export const useGameStore = defineStore('game', () => {
 
   // Mode & Players
   const gameMode = ref<GameMode>('pve');
+  const studySubMode = ref<StudySubMode>('manual');
   const playerSide = ref<PieceColor>('red');
 
   const aiThinkingTimeMs = computed({
@@ -62,9 +65,15 @@ export const useGameStore = defineStore('game', () => {
   const isEngineReady = ref(false);
   const isAiThinking = ref(false);
   const isAnalyzing = ref(false);
+  const isStudyAnalyzing = ref(false);
+  const isEngineError = ref(false);
+  const engineErrorMsg = ref<string | null>(null);
   const engineName = ref('Pikafish NNUE');
-  const engineStatusText = ref('就绪');
-  const autoAnalysis = ref(false); // 默认隐藏 AI 提示箭头，由用户主动点击开启
+  const engineStatusText = ref('未就绪');
+  const autoAnalysis = ref(false);
+
+  // AI Watchdog Timer
+  let aiWatchdogTimer: any = null;
 
   const engineInfo = ref<EngineInfo>({
     depth: 0,
@@ -79,6 +88,7 @@ export const useGameStore = defineStore('game', () => {
 
   const selectedMultiPv = ref<number>(1);
   const currentSearchId = ref<number>(0);
+  const activeAiSearchId = ref<number | null>(null);
 
   // Replay cursor
   const currentStep = ref<number>(0);
@@ -86,16 +96,31 @@ export const useGameStore = defineStore('game', () => {
   // Listeners initialized flag
   let isListenerInit = false;
 
+  // Board state mutation version for rock-solid Vue reactivity
+  const boardVersion = ref(0);
+
   // Computed state
-  const activeColor = computed(() => board.value.activeColor);
-  const grid = computed(() => board.value.grid);
+  const activeColor = computed(() => {
+    boardVersion.value;
+    return board.value.activeColor;
+  });
+  const grid = computed(() => {
+    boardVersion.value;
+    return board.value.grid.map(row => [...row]);
+  });
   const history = computed(() => board.value.history);
   const lastMove = computed(() => {
     if (board.value.history.length === 0) return null;
     return board.value.history[board.value.history.length - 1];
   });
 
+  const currentFen = computed(() => {
+    boardVersion.value;
+    return board.value.getFen();
+  });
+
   const inCheckKingPos = computed(() => {
+    boardVersion.value;
     if (board.value.isInCheck()) {
       for (let r = 0; r <= 9; r++) {
         for (let f = 0; f <= 8; f++) {
@@ -109,12 +134,27 @@ export const useGameStore = defineStore('game', () => {
     return null;
   });
 
+  const matchStatus = computed<MatchStatus>(() => {
+    if (board.value.isGameOver().isOver) return 'game_over';
+    if (isEngineError.value) return 'engine_error';
+    if (isAiThinking.value) return 'ai_thinking';
+    return 'user_turn';
+  });
+
   const isUserTurn = computed(() => {
+    if (isEngineError.value) return false;
     if (gameMode.value === 'pvp') return true;
+    if (gameMode.value === 'study') {
+      if (studySubMode.value === 'manual') return true;
+      if (studySubMode.value === 'battle') {
+        return activeColor.value === playerSide.value && !isAiThinking.value;
+      }
+      if (studySubMode.value === 'edit') return true;
+    }
     if (gameMode.value === 'pve') {
       return activeColor.value === playerSide.value && !isAiThinking.value;
     }
-    return true; // study / replay
+    return true; // replay
   });
 
   // Recommended arrow computed from selected MultiPV line, or bestMove, or PV
@@ -137,7 +177,22 @@ export const useGameStore = defineStore('game', () => {
     }
   });
 
-  const activeAiSearchId = ref<number | null>(null);
+  function clearAiWatchdog() {
+    if (aiWatchdogTimer) {
+      clearTimeout(aiWatchdogTimer);
+      aiWatchdogTimer = null;
+    }
+  }
+
+  function handleAiFailure(reason: string) {
+    clearAiWatchdog();
+    isAiThinking.value = false;
+    activeAiSearchId.value = null;
+    isEngineError.value = true;
+    engineErrorMsg.value = reason;
+    engineStatusText.value = '引擎异常: ' + reason;
+    console.error('[AI Failure]', reason);
+  }
 
   // Initialize engine & listeners
   async function initEngine() {
@@ -145,7 +200,7 @@ export const useGameStore = defineStore('game', () => {
     isListenerInit = true;
 
     if (!isTauri()) {
-      engineStatusText.value = '单机规则模式 (网页预览中)';
+      engineStatusText.value = '网页预览模式 (无引擎)';
       return;
     }
 
@@ -162,11 +217,28 @@ export const useGameStore = defineStore('game', () => {
 
       await listen<boolean>('engine-ready', async () => {
         isEngineReady.value = true;
-        engineStatusText.value = '引擎就绪';
+        isEngineError.value = false;
+        engineErrorMsg.value = null;
+        engineStatusText.value = '就绪';
         await engineSettings.fetchEngineStatus();
         await engineSettings.applySettings();
-        // If it is AI turn right away, trigger search
         checkAiTurn();
+      });
+
+      await listen<string>('engine-status', (e) => {
+        if (e.payload === 'stopped') {
+          isEngineReady.value = false;
+          isAiThinking.value = false;
+          isAnalyzing.value = false;
+          clearAiWatchdog();
+          engineStatusText.value = '引擎已停止';
+          if (
+            (gameMode.value === 'pve' && activeColor.value !== playerSide.value) ||
+            (gameMode.value === 'study' && studySubMode.value === 'battle' && activeColor.value !== playerSide.value)
+          ) {
+            handleAiFailure('引擎进程已退出');
+          }
+        }
       });
 
       await listen<any>('engine-info', (e) => {
@@ -242,6 +314,7 @@ export const useGameStore = defineStore('game', () => {
         isAnalyzing.value = false;
 
         if (is_ai_move && isAiThinking.value && activeAiSearchId.value === search_id) {
+          clearAiWatchdog();
           isAiThinking.value = false;
           activeAiSearchId.value = null;
           executeAiMove(bestmove);
@@ -249,11 +322,11 @@ export const useGameStore = defineStore('game', () => {
       });
 
       // Start engine process
-      engineStatusText.value = '正在启动皮卡鱼引擎...';
+      engineStatusText.value = '启动皮卡鱼...';
       await invoke('start_engine', {});
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Init engine error:', err);
-      engineStatusText.value = '单机规则模式 (未连接引擎)';
+      engineStatusText.value = '单机模式 (未加载引擎)';
     }
   }
 
@@ -271,22 +344,32 @@ export const useGameStore = defineStore('game', () => {
     if (isAiMoveRequest) {
       isAiThinking.value = true;
       isAnalyzing.value = false;
-      engineStatusText.value = '皮卡鱼正在思考...';
+      isEngineError.value = false;
+      engineErrorMsg.value = null;
+      engineStatusText.value = '皮卡鱼思考中...';
     } else {
       isAnalyzing.value = true;
-      engineStatusText.value = '深度算力分析中...';
+      engineStatusText.value = '实时分析中...';
     }
 
     try {
       const fen = board.value.getFen();
       let searchType: string;
       let limitValue: number | null = null;
+      let expectedTimeMs = 2000;
 
       if (isAiMoveRequest) {
         searchType = engineSettings.matchSearchType;
-        if (searchType === 'movetime') limitValue = engineSettings.matchMovetimeMs;
-        else if (searchType === 'depth') limitValue = engineSettings.matchDepth;
-        else if (searchType === 'nodes') limitValue = engineSettings.matchNodes;
+        if (searchType === 'movetime') {
+          limitValue = engineSettings.matchMovetimeMs;
+          expectedTimeMs = engineSettings.matchMovetimeMs;
+        } else if (searchType === 'depth') {
+          limitValue = engineSettings.matchDepth;
+          expectedTimeMs = 10000;
+        } else if (searchType === 'nodes') {
+          limitValue = engineSettings.matchNodes;
+          expectedTimeMs = 10000;
+        }
       } else {
         searchType = engineSettings.analysisSearchType;
         if (searchType === 'infinite') limitValue = null;
@@ -313,41 +396,83 @@ export const useGameStore = defineStore('game', () => {
 
       if (isAiMoveRequest) {
         activeAiSearchId.value = searchId;
+
+        // Setup watchdog timer
+        clearAiWatchdog();
+        const timeoutMs = Math.max(8000, expectedTimeMs + 6000);
+        aiWatchdogTimer = setTimeout(() => {
+          if (isAiThinking.value && activeAiSearchId.value === searchId) {
+            handleAiFailure('AI 思考超时，未收到引擎走法');
+          }
+        }, timeoutMs);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Search error:', err);
-      isAiThinking.value = false;
-      isAnalyzing.value = false;
-      activeAiSearchId.value = null;
+      if (isAiMoveRequest) {
+        handleAiFailure(String(err));
+      } else {
+        isAnalyzing.value = false;
+      }
     }
   }
 
   async function stopAnalysis() {
+    clearAiWatchdog();
+    isAiThinking.value = false;
+    isAnalyzing.value = false;
+    activeAiSearchId.value = null;
+    currentSearchId.value = 0;
+    engineStatusText.value = '分析已停止';
+
     if (!isTauri()) return;
     try {
       await invoke('stop_search');
-      isAiThinking.value = false;
-      isAnalyzing.value = false;
-      activeAiSearchId.value = null;
-      currentSearchId.value = 0;
-      engineStatusText.value = '计算已停止';
     } catch (e) {
       console.warn('Stop search error:', e);
     }
   }
 
   function executeAiMove(uci: string) {
+    clearAiWatchdog();
+
+    if (!uci || uci === '(none)' || uci.length < 4) {
+      const over = board.value.isGameOver();
+      if (over.isOver) {
+        sound.play('end');
+      } else {
+        handleAiFailure('AI 无合法走法 (已认输或困毙)');
+      }
+      return;
+    }
+
     try {
       const { from, to } = parseUciMove(uci);
-      const piece = board.value.grid[from.rank][from.file];
+
+      if (isNaN(from.file) || isNaN(from.rank) || isNaN(to.file) || isNaN(to.rank)) {
+        handleAiFailure('AI 走法格式异常: ' + uci);
+        return;
+      }
+
+      const piece = board.value.grid[from.rank]?.[from.file];
       if (!piece || piece.color !== activeColor.value) {
-        console.warn('Invalid AI move suggested:', uci);
+        handleAiFailure('AI 走法与当前执棋方不符: ' + uci);
+        return;
+      }
+
+      const legalMoves = board.value.getLegalMoves(from);
+      const isLegal = legalMoves.some(m => m.file === to.file && m.rank === to.rank);
+      if (!isLegal) {
+        handleAiFailure('AI 走法不符合规则: ' + uci);
         return;
       }
 
       const move = board.value.makeMove(from, to);
       if (move) {
+        boardVersion.value++;
+        isEngineError.value = false;
+        engineErrorMsg.value = null;
         currentStep.value = board.value.history.length;
+
         if (move.captured) {
           sound.play('eat');
         } else {
@@ -361,23 +486,57 @@ export const useGameStore = defineStore('game', () => {
         const over = board.value.isGameOver();
         if (over.isOver) {
           sound.play('end');
-        } else if (autoAnalysis.value) {
+        } else if (autoAnalysis.value || (gameMode.value === 'study' && isStudyAnalyzing.value)) {
           triggerAnalysis(false);
         }
+      } else {
+        handleAiFailure('落子执行失败: ' + uci);
       }
-    } catch (err) {
-      console.error('Failed to execute AI move:', err);
+    } catch (err: any) {
+      handleAiFailure('执行走棋异常: ' + String(err));
     }
   }
 
   function checkAiTurn() {
+    clearAiWatchdog();
     if (gameMode.value === 'pve' && activeColor.value !== playerSide.value) {
       const over = board.value.isGameOver();
       if (!over.isOver) {
         triggerAnalysis(true);
       }
-    } else if (autoAnalysis.value) {
+    } else if (gameMode.value === 'study' && studySubMode.value === 'battle' && activeColor.value !== playerSide.value) {
+      const over = board.value.isGameOver();
+      if (!over.isOver) {
+        triggerAnalysis(true);
+      }
+    } else if (autoAnalysis.value || (gameMode.value === 'study' && isStudyAnalyzing.value)) {
       triggerAnalysis(false);
+    }
+  }
+
+  async function retryAiMove() {
+    clearAiWatchdog();
+    if (isAiThinking.value) {
+      await stopAnalysis();
+    }
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
+    engineStatusText.value = '正在重试 AI 搜索...';
+    checkAiTurn();
+  }
+
+  async function restartEngineAndResume() {
+    clearAiWatchdog();
+    await stopAnalysis();
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
+    engineStatusText.value = '正在重启引擎...';
+    const settings = useEngineSettingsStore();
+    const ok = await settings.restartEngine();
+    if (ok) {
+      checkAiTurn();
+    } else {
+      handleAiFailure('引擎重启失败: ' + (settings.lastError || '未知错误'));
     }
   }
 
@@ -405,6 +564,7 @@ export const useGameStore = defineStore('game', () => {
     const move = board.value.makeMove(from, to);
     if (!move) return;
 
+    boardVersion.value++;
     selectedPos.value = null;
     legalTargets.value = [];
     currentStep.value = board.value.history.length;
@@ -431,24 +591,36 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
-  function undo() {
-    activeAiSearchId.value = null;
+  async function undo() {
+    clearAiWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
-      stopAnalysis();
+      await stopAnalysis();
     }
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
 
-    if (gameMode.value === 'pve') {
-      // Undo both AI's and player's move if it's player's turn
-      if (board.value.history.length >= 2) {
-        board.value.undoMove();
-        board.value.undoMove();
-      } else if (board.value.history.length === 1) {
-        board.value.undoMove();
+    if (gameMode.value === 'pve' || (gameMode.value === 'study' && studySubMode.value === 'battle')) {
+      // In battle mode:
+      // If it is AI turn (player just moved, AI has not moved yet): only undo 1 move
+      if (activeColor.value !== playerSide.value) {
+        if (board.value.history.length >= 1) {
+          board.value.undoMove();
+        }
+      } else {
+        // If it is player turn (AI finished moving): undo 2 moves (AI move + player move)
+        if (board.value.history.length >= 2) {
+          board.value.undoMove();
+          board.value.undoMove();
+        } else if (board.value.history.length === 1) {
+          board.value.undoMove();
+        }
       }
     } else {
+      // PVP or study manual mode: undo 1 single move
       board.value.undoMove();
     }
 
+    boardVersion.value++;
     selectedPos.value = null;
     legalTargets.value = [];
     currentStep.value = board.value.history.length;
@@ -456,22 +628,23 @@ export const useGameStore = defineStore('game', () => {
     selectedMultiPv.value = 1;
     sound.play('undo');
 
-    if (autoAnalysis.value) {
-      triggerAnalysis(false);
-    }
+    checkAiTurn();
   }
 
-  function newGame(mode: GameMode = 'pve', side: PieceColor = 'red') {
-    activeAiSearchId.value = null;
+  async function newGame(mode: GameMode = 'pve', side: PieceColor = 'red') {
+    clearAiWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
-      stopAnalysis();
+      await stopAnalysis();
     }
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
 
     gameMode.value = mode;
     playerSide.value = side;
-    flipped.value = side === 'black'; // flip board if player chose black
+    flipped.value = side === 'black';
 
     board.value.reset(INITIAL_FEN);
+    boardVersion.value++;
     selectedPos.value = null;
     legalTargets.value = [];
     currentStep.value = 0;
@@ -492,6 +665,141 @@ export const useGameStore = defineStore('game', () => {
     checkAiTurn();
   }
 
+  // Study Mode Specific Actions
+  async function enterStudyMode(subMode: StudySubMode = 'manual') {
+    clearAiWatchdog();
+    if (isAiThinking.value || isAnalyzing.value) {
+      await stopAnalysis();
+    }
+    gameMode.value = 'study';
+    studySubMode.value = subMode;
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
+    selectedPos.value = null;
+    legalTargets.value = [];
+    engineInfo.value.multipvLines = [];
+    selectedMultiPv.value = 1;
+  }
+
+  async function exitStudyMode() {
+    clearAiWatchdog();
+    if (isAiThinking.value || isAnalyzing.value) {
+      await stopAnalysis();
+    }
+    isStudyAnalyzing.value = false;
+    gameMode.value = 'pve';
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
+    selectedPos.value = null;
+    legalTargets.value = [];
+  }
+
+  async function setStudySubMode(mode: StudySubMode) {
+    if (isAiThinking.value || isAnalyzing.value) {
+      await stopAnalysis();
+    }
+    studySubMode.value = mode;
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
+    selectedPos.value = null;
+    legalTargets.value = [];
+    if (mode === 'battle') {
+      checkAiTurn();
+    }
+  }
+
+  async function setActiveColor(color: PieceColor) {
+    if (isAiThinking.value || isAnalyzing.value) {
+      await stopAnalysis();
+    }
+    board.value.activeColor = color;
+    boardVersion.value++;
+    selectedPos.value = null;
+    legalTargets.value = [];
+    currentStep.value = board.value.history.length;
+    engineInfo.value.multipvLines = [];
+    selectedMultiPv.value = 1;
+    if (gameMode.value === 'study' && studySubMode.value === 'battle') {
+      checkAiTurn();
+    } else if (isStudyAnalyzing.value) {
+      triggerAnalysis(false);
+    }
+  }
+
+  async function resetToPreset(fen: string = INITIAL_FEN) {
+    if (isAiThinking.value || isAnalyzing.value) {
+      await stopAnalysis();
+    }
+    board.value.reset(fen);
+    boardVersion.value++;
+    selectedPos.value = null;
+    legalTargets.value = [];
+    board.value.history = [];
+    currentStep.value = 0;
+    engineInfo.value.multipvLines = [];
+    selectedMultiPv.value = 1;
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
+    if (gameMode.value === 'study' && studySubMode.value === 'battle') {
+      checkAiTurn();
+    } else if (isStudyAnalyzing.value) {
+      triggerAnalysis(false);
+    }
+  }
+
+  function loadCustomFen(fen: string): { success: boolean; error?: string } {
+    try {
+      const clean = fen.trim();
+      if (!clean) return { success: false, error: 'FEN 字符串不能为空' };
+      resetToPreset(clean);
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: String(e.message || e) };
+    }
+  }
+
+  function triggerStudyAiMove() {
+    if (isAiThinking.value) return;
+    const over = board.value.isGameOver();
+    if (!over.isOver) {
+      triggerAnalysis(true);
+    }
+  }
+
+  async function toggleStudyAnalysis() {
+    isStudyAnalyzing.value = !isStudyAnalyzing.value;
+    if (isStudyAnalyzing.value) {
+      triggerAnalysis(false);
+    } else {
+      await stopAnalysis();
+    }
+  }
+
+  function setPieceAt(pos: Position, piece: { type: PieceType; color: PieceColor } | null) {
+    if (piece) {
+      board.value.grid[pos.rank][pos.file] = {
+        color: piece.color,
+        type: piece.type,
+        id: `p_${piece.color}_${piece.type}_${pos.rank}_${pos.file}_${Date.now()}`,
+      };
+    } else {
+      board.value.grid[pos.rank][pos.file] = null;
+    }
+    boardVersion.value++;
+    currentStep.value = board.value.history.length;
+  }
+
+  function clearBoard() {
+    for (let r = 0; r < 10; r++) {
+      for (let f = 0; f < 9; f++) {
+        board.value.grid[r][f] = null;
+      }
+    }
+    board.value.history = [];
+    boardVersion.value++;
+    currentStep.value = 0;
+  }
+
   function flipBoard() {
     flipped.value = !flipped.value;
   }
@@ -499,7 +807,7 @@ export const useGameStore = defineStore('game', () => {
   function jumpToStep(step: number) {
     if (step < 0 || step > board.value.history.length) return;
     currentStep.value = step;
-    if (autoAnalysis.value || isAnalyzing.value) {
+    if (autoAnalysis.value || isAnalyzing.value || isStudyAnalyzing.value) {
       triggerAnalysis(false);
     }
   }
@@ -527,11 +835,16 @@ export const useGameStore = defineStore('game', () => {
     legalTargets,
     flipped,
     gameMode,
+    studySubMode,
     playerSide,
     aiThinkingTimeMs,
     isEngineReady,
     isAiThinking,
     isAnalyzing,
+    isStudyAnalyzing,
+    isEngineError,
+    engineErrorMsg,
+    matchStatus,
     engineName,
     engineStatusText,
     engineInfo,
@@ -540,6 +853,7 @@ export const useGameStore = defineStore('game', () => {
     inCheckKingPos,
     isUserTurn,
     currentStep,
+    currentFen,
     autoAnalysis,
 
     initEngine,
@@ -553,5 +867,20 @@ export const useGameStore = defineStore('game', () => {
     stopAnalysis,
     toggleAnalysis,
     selectMultiPvLine,
+    checkAiTurn,
+    retryAiMove,
+    restartEngineAndResume,
+
+    // Study mode exports
+    enterStudyMode,
+    exitStudyMode,
+    setStudySubMode,
+    setActiveColor,
+    resetToPreset,
+    loadCustomFen,
+    triggerStudyAiMove,
+    toggleStudyAnalysis,
+    setPieceAt,
+    clearBoard,
   };
 });

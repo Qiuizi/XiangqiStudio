@@ -42,10 +42,24 @@ const gameStore = useGameStore();
 
 function onHeaderChangeView(view: 'game' | 'replay' | 'study') {
   currentView.value = view;
+  if (view === 'study') {
+    gameStore.enterStudyMode('manual');
+  } else if (view === 'game') {
+    if (gameStore.gameMode === 'study') {
+      gameStore.exitStudyMode();
+    }
+  }
 }
 
 function onLobbySelectView(view: 'game' | 'replay' | 'study') {
   currentView.value = view;
+  if (view === 'study') {
+    gameStore.enterStudyMode('manual');
+  } else if (view === 'game') {
+    if (gameStore.gameMode === 'study') {
+      gameStore.exitStudyMode();
+    }
+  }
 }
 
 onMounted(() => {

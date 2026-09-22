@@ -39,9 +39,11 @@ export const useEngineSettingsStore = defineStore('engineSettings', () => {
   const isEngineReady = ref(false);
 
   // Core UCI Parameters
-  const defaultThreads = Math.min(Math.max(1, navigator.hardwareConcurrency || 4), 16);
+  const logicalCores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+  // Leave at least 2 cores for Windows OS and Vue/WebView2 rendering to prevent stuttering
+  const defaultThreads = Math.max(1, Math.min(4, logicalCores - 2));
   const threads = ref<number>(defaultThreads);
-  const hash = ref<number>(64);
+  const hash = ref<number>(128);
   const multiPv = ref<number>(1);
   const skillLevel = ref<number>(20);
   const limitStrength = ref<boolean>(false);
@@ -156,6 +158,9 @@ export const useEngineSettingsStore = defineStore('engineSettings', () => {
     lastError.value = null;
 
     try {
+      // Ensure threads does not exceed logical cores
+      threads.value = Math.max(1, Math.min(threads.value, logicalCores));
+
       // Build verified options list based on active availableOptions
       const optionsList: [string, string][] = [
         ['Threads', String(threads.value)],
@@ -232,7 +237,7 @@ export const useEngineSettingsStore = defineStore('engineSettings', () => {
 
   function resetToDefaults() {
     threads.value = defaultThreads;
-    hash.value = 64;
+    hash.value = 128;
     multiPv.value = 1;
     skillLevel.value = 20;
     limitStrength.value = false;
