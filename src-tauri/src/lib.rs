@@ -28,6 +28,7 @@ async fn search_position(
     movetime_ms: Option<u64>,
     depth: Option<u32>,
     is_ai_move: Option<bool>,
+    search_id: Option<u64>,
 ) -> Result<u64, String> {
     search_position_internal(
         state.inner().clone(),
@@ -38,6 +39,7 @@ async fn search_position(
         movetime_ms,
         depth,
         is_ai_move.unwrap_or(false),
+        search_id,
     )
     .await
 }

@@ -254,7 +254,7 @@
             </div>
 
             <div v-if="candidateLines.length === 0" class="no-pv-hint">
-              {{ gameStore.isAnalyzing ? '正在展开博弈树计算...' : '点击下方“开始分析”唤醒引擎解算' }}
+              {{ gameStore.isAiThinking ? 'AI 正在对弈思考计算中...' : gameStore.isAnalyzing ? '正在展开博弈树计算...' : '点击下方“开始分析”唤醒引擎解算' }}
             </div>
           </div>
         </div>

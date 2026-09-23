@@ -44,6 +44,8 @@ function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+let frontendSearchSeq = 0;
+
 export const useGameStore = defineStore('game', () => {
   // Game Board Model
   const board = ref(new XiangqiBoard());
@@ -259,12 +261,12 @@ export const useGameStore = defineStore('game', () => {
       });
 
       await listen<boolean>('engine-ready', async () => {
+        console.log('[AI Flow] Engine readyok confirmed -> engine-ready received');
         isEngineReady.value = true;
         isEngineError.value = false;
         engineErrorMsg.value = null;
         engineStatusText.value = '就绪';
         await engineSettings.fetchEngineStatus();
-        await engineSettings.applySettings();
         checkAiTurn();
       });
 
@@ -363,6 +365,7 @@ export const useGameStore = defineStore('game', () => {
 
       await listen<{ search_id: number; is_ai_move: boolean; bestmove: string }>('engine-bestmove', (e) => {
         const { bestmove, search_id, is_ai_move } = e.payload;
+        console.log(`[AI Flow] engine-bestmove received: bestmove=${bestmove}, search_id=${search_id}, is_ai_move=${is_ai_move}, activeAiId=${activeAiSearchId.value}, isAiThinking=${isAiThinking.value}`);
 
         if (is_ai_move) {
           if (isAiThinking.value && activeAiSearchId.value === search_id) {
@@ -371,7 +374,10 @@ export const useGameStore = defineStore('game', () => {
             activeAiSearchId.value = null;
             engineInfo.value.bestMove = bestmove;
             updateAiArrow(null, true);
+            console.log(`[AI Flow] Executing AI bestmove: ${bestmove}`);
             executeAiMove(bestmove);
+          } else {
+            console.warn(`[AI Flow] Discarded bestmove '${bestmove}': isAiThinking=${isAiThinking.value}, activeAiSearchId=${activeAiSearchId.value}, incomingId=${search_id}`);
           }
           return;
         }
@@ -452,14 +458,9 @@ export const useGameStore = defineStore('game', () => {
         else if (searchType === 'nodes') limitValue = engineSettings.analysisNodes;
       }
 
-      const searchId = await invoke<number>('search_position', {
-        fen,
-        moves: [],
-        searchType,
-        limitValue,
-        isAiMove: isAiMoveRequest,
-      });
-
+      // Pre-allocate search ID so activeAiSearchId & currentSearchId are registered
+      // BEFORE invoke starts and BEFORE Pikafish begins streaming events!
+      const searchId = ++frontendSearchSeq;
       currentSearchId.value = searchId;
       engineInfo.value.depth = 0;
       engineInfo.value.seldepth = undefined;
@@ -481,6 +482,16 @@ export const useGameStore = defineStore('game', () => {
           }
         }, timeoutMs);
       }
+
+      console.log(`[AI Flow] invoke search_position: searchId=${searchId}, isAiMove=${isAiMoveRequest}, type=${searchType}, limit=${limitValue}, FEN='${fen}'`);
+      await invoke<number>('search_position', {
+        searchId,
+        fen,
+        moves: [],
+        searchType,
+        limitValue,
+        isAiMove: isAiMoveRequest,
+      });
     } catch (err: any) {
       console.error('Search error:', err);
       if (isAiMoveRequest) {
@@ -574,6 +585,7 @@ export const useGameStore = defineStore('game', () => {
 
   function checkAiTurn() {
     clearAiWatchdog();
+    console.log(`[AI Flow] checkAiTurn: gameMode=${gameMode.value}, activeColor=${activeColor.value}, playerSide=${playerSide.value}, isAiThinking=${isAiThinking.value}`);
     if (gameMode.value === 'pve' && activeColor.value !== playerSide.value) {
       const over = board.value.isGameOver();
       if (!over.isOver) {
@@ -641,6 +653,7 @@ export const useGameStore = defineStore('game', () => {
     const move = board.value.makeMove(from, to);
     if (!move) return;
 
+    console.log(`[AI Flow] makeUserMove: from=(${from.file},${from.rank}) to=(${to.file},${to.rank}), FEN=${board.value.getFen()}`);
     boardVersion.value++;
     selectedPos.value = null;
     legalTargets.value = [];
@@ -955,6 +968,7 @@ export const useGameStore = defineStore('game', () => {
     checkAiTurn,
     retryAiMove,
     restartEngineAndResume,
+    executeAiMove,
 
     // Study mode exports
     enterStudyMode,

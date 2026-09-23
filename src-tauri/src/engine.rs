@@ -406,6 +406,7 @@ pub async fn start_engine_internal(
         let mut last_info_emit_by_pv: std::collections::HashMap<u32, Instant> = std::collections::HashMap::new();
         let mut latest_info_by_pv: std::collections::HashMap<u32, EngineInfoPayload> = std::collections::HashMap::new();
         let mut tracked_search_id: u64 = 0;
+        let mut initial_ready_emitted = false;
 
         while let Ok(Some(line)) = lines.next_line().await {
             let trimmed = line.trim();
@@ -453,8 +454,14 @@ pub async fn start_engine_internal(
                     let _ = sin.flush().await;
                 }
             } else if trimmed == "readyok" {
-                // True readiness after NNUE and hash table are initialized
-                let _ = app_clone.emit("engine-ready", true);
+                // True readiness only after initial handshake or restart, never on internal option updates
+                if !initial_ready_emitted {
+                    initial_ready_emitted = true;
+                    eprintln!("[UCI Lifecycle] Engine initial readyok received -> emitting engine-ready");
+                    let _ = app_clone.emit("engine-ready", true);
+                } else {
+                    eprintln!("[UCI Lifecycle] Internal readyok acknowledged");
+                }
             } else if trimmed.starts_with("info ") {
                 if let Some(mut payload) = parse_info_line(trimmed) {
                     let st = shared_clone.lock().await;
@@ -695,6 +702,7 @@ pub async fn search_position_internal(
     movetime_ms: Option<u64>,
     depth: Option<u32>,
     is_ai_move: bool,
+    search_id_opt: Option<u64>,
 ) -> Result<u64, String> {
     // 1. If currently searching or stopping, cleanly abort and wait for engine to reach Idle
     let phase_rx = {
@@ -724,8 +732,9 @@ pub async fn search_position_internal(
 
     // 2. Start new search on guaranteed idle engine
     let mut state = shared.lock().await;
-    let search_id = SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let search_id = search_id_opt.unwrap_or_else(|| SEARCH_COUNTER.fetch_add(1, Ordering::SeqCst));
     state.current_search_id = search_id;
+    eprintln!("[UCI Search] Starting search: ID={}, is_ai_move={}, type={:?}, limit={:?}, fen='{}'", search_id, is_ai_move, search_type, limit_value, fen);
 
     let sin = state.stdin.as_mut().ok_or("引擎未就绪")?;
 
@@ -774,6 +783,7 @@ pub async fn search_position_internal(
         .await
         .map_err(|e| e.to_string())?;
     sin.flush().await.map_err(|e| e.to_string())?;
+    eprintln!("[UCI Search] Stdin sent: pos='{}' | go='{}'", pos_cmd.trim(), go_cmd.trim());
 
     state.is_searching = true;
     state.search_phase = SearchPhase::Searching;
