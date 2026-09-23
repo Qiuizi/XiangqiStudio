@@ -91,6 +91,7 @@ export const useGameStore = defineStore('game', () => {
   const selectedMultiPv = ref<number>(1);
   const currentSearchId = ref<number>(0);
   const activeAiSearchId = ref<number | null>(null);
+  const activeAnalysisFen = ref<string | null>(null);
 
   // Replay cursor
   const currentStep = ref<number>(0);
@@ -166,7 +167,7 @@ export const useGameStore = defineStore('game', () => {
   let currentArrowMoveStr: string | null = null;
 
   function updateAiArrow(moveStr: string | null, forceImmediate: boolean = false) {
-    if (!moveStr || moveStr.length < 4) {
+    if (!moveStr || moveStr.length < 4 || (gameMode.value === 'study' && !isStudyAnalyzing.value)) {
       if (pendingArrowTimer) {
         clearTimeout(pendingArrowTimer);
         pendingArrowTimer = null;
@@ -205,6 +206,11 @@ export const useGameStore = defineStore('game', () => {
       currentArrowMoveStr = moveStr;
       pendingArrowTimer = setTimeout(() => {
         pendingArrowTimer = null;
+        if (gameMode.value === 'study' && !isStudyAnalyzing.value) {
+          displayedAiArrow.value = null;
+          currentArrowMoveStr = null;
+          return;
+        }
         if (currentArrowMoveStr) {
           try {
             displayedAiArrow.value = parseUciMove(currentArrowMoveStr);
@@ -220,7 +226,12 @@ export const useGameStore = defineStore('game', () => {
   }
 
   // Recommended arrow computed reading stabilized state
-  const aiArrow = computed(() => displayedAiArrow.value);
+  const aiArrow = computed(() => {
+    if (gameMode.value === 'study' && !isStudyAnalyzing.value) {
+      return null;
+    }
+    return displayedAiArrow.value;
+  });
 
   function clearAiWatchdog() {
     if (aiWatchdogTimer) {
@@ -288,8 +299,18 @@ export const useGameStore = defineStore('game', () => {
 
       await listen<any>('engine-info', (e) => {
         const payload = e.payload;
-        if (payload.search_id && currentSearchId.value && payload.search_id !== currentSearchId.value) {
+        if (!currentSearchId.value || (payload.search_id && payload.search_id !== currentSearchId.value)) {
           return;
+        }
+
+        // Auxiliary analysis guard: reject stale info if analysis is inactive or board FEN changed
+        if (!isAiThinking.value) {
+          if (gameMode.value === 'study' && !isStudyAnalyzing.value) {
+            return;
+          }
+          if (activeAnalysisFen.value && board.value.getFen() !== activeAnalysisFen.value) {
+            return;
+          }
         }
 
         if (payload.depth !== undefined && payload.depth !== null) {
@@ -383,9 +404,16 @@ export const useGameStore = defineStore('game', () => {
         }
 
         // Live analysis candidate move
-        if (currentSearchId.value && search_id !== currentSearchId.value) {
+        if (!currentSearchId.value || (search_id && search_id !== currentSearchId.value)) {
           return;
         }
+        if (gameMode.value === 'study' && !isStudyAnalyzing.value) {
+          return;
+        }
+        if (activeAnalysisFen.value && board.value.getFen() !== activeAnalysisFen.value) {
+          return;
+        }
+
         engineInfo.value.bestMove = bestmove;
         if (selectedMultiPv.value <= 1) {
           updateAiArrow(bestmove, true);
@@ -472,6 +500,7 @@ export const useGameStore = defineStore('game', () => {
       if (isAiMoveRequest) {
         updateAiArrow(null, true);
         activeAiSearchId.value = searchId;
+        activeAnalysisFen.value = null;
 
         // Setup watchdog timer
         clearAiWatchdog();
@@ -481,6 +510,9 @@ export const useGameStore = defineStore('game', () => {
             handleAiFailure('AI 思考超时，未收到引擎走法');
           }
         }, timeoutMs);
+      } else {
+        activeAnalysisFen.value = fen;
+        updateAiArrow(null, true);
       }
 
       console.log(`[AI Flow] invoke search_position: searchId=${searchId}, isAiMove=${isAiMoveRequest}, type=${searchType}, limit=${limitValue}, FEN='${fen}'`);
@@ -502,11 +534,21 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
-  async function stopAnalysis() {
-    clearAiWatchdog();
-    isAiThinking.value = false;
+  async function stopAnalysis(forceStopAi: boolean = false) {
+    updateAiArrow(null, true);
+    activeAnalysisFen.value = null;
     isAnalyzing.value = false;
-    activeAiSearchId.value = null;
+
+    if (isAiThinking.value && !forceStopAi) {
+      return;
+    }
+
+    if (forceStopAi || isAiThinking.value) {
+      clearAiWatchdog();
+      isAiThinking.value = false;
+      activeAiSearchId.value = null;
+    }
+
     currentSearchId.value = 0;
     engineStatusText.value = '分析已停止';
 
@@ -606,7 +648,7 @@ export const useGameStore = defineStore('game', () => {
   async function retryAiMove() {
     clearAiWatchdog();
     if (isAiThinking.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
     }
     isEngineError.value = false;
     engineErrorMsg.value = null;
@@ -616,7 +658,7 @@ export const useGameStore = defineStore('game', () => {
 
   async function restartEngineAndResume() {
     clearAiWatchdog();
-    await stopAnalysis();
+    await stopAnalysis(true);
     isEngineError.value = false;
     engineErrorMsg.value = null;
     engineStatusText.value = '正在重启引擎...';
@@ -653,6 +695,7 @@ export const useGameStore = defineStore('game', () => {
     const move = board.value.makeMove(from, to);
     if (!move) return;
 
+    updateAiArrow(null, true);
     console.log(`[AI Flow] makeUserMove: from=(${from.file},${from.rank}) to=(${to.file},${to.rank}), FEN=${board.value.getFen()}`);
     boardVersion.value++;
     selectedPos.value = null;
@@ -684,7 +727,9 @@ export const useGameStore = defineStore('game', () => {
   async function undo() {
     clearAiWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
     }
     isEngineError.value = false;
     engineErrorMsg.value = null;
@@ -724,7 +769,9 @@ export const useGameStore = defineStore('game', () => {
   async function newGame(mode: GameMode = 'pve', side: PieceColor = 'red') {
     clearAiWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
     }
     isEngineError.value = false;
     engineErrorMsg.value = null;
@@ -759,7 +806,9 @@ export const useGameStore = defineStore('game', () => {
   async function enterStudyMode(subMode: StudySubMode = 'manual') {
     clearAiWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
     }
     gameMode.value = 'study';
     studySubMode.value = subMode;
@@ -774,9 +823,10 @@ export const useGameStore = defineStore('game', () => {
   async function exitStudyMode() {
     clearAiWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
     }
     isStudyAnalyzing.value = false;
+    updateAiArrow(null, true);
     gameMode.value = 'pve';
     isEngineError.value = false;
     engineErrorMsg.value = null;
@@ -786,7 +836,9 @@ export const useGameStore = defineStore('game', () => {
 
   async function setStudySubMode(mode: StudySubMode) {
     if (isAiThinking.value || isAnalyzing.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
     }
     studySubMode.value = mode;
     isEngineError.value = false;
@@ -800,7 +852,9 @@ export const useGameStore = defineStore('game', () => {
 
   async function setActiveColor(color: PieceColor) {
     if (isAiThinking.value || isAnalyzing.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
     }
     board.value.activeColor = color;
     boardVersion.value++;
@@ -818,7 +872,9 @@ export const useGameStore = defineStore('game', () => {
 
   async function resetToPreset(fen: string = INITIAL_FEN) {
     if (isAiThinking.value || isAnalyzing.value) {
-      await stopAnalysis();
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
     }
     board.value.reset(fen);
     boardVersion.value++;
@@ -861,11 +917,12 @@ export const useGameStore = defineStore('game', () => {
     if (isStudyAnalyzing.value) {
       triggerAnalysis(false);
     } else {
-      await stopAnalysis();
+      await stopAnalysis(false);
     }
   }
 
   function setPieceAt(pos: Position, piece: { type: PieceType; color: PieceColor } | null) {
+    updateAiArrow(null, true);
     if (piece) {
       board.value.grid[pos.rank][pos.file] = {
         color: piece.color,
@@ -880,6 +937,7 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function clearBoard() {
+    updateAiArrow(null, true);
     for (let r = 0; r < 10; r++) {
       for (let f = 0; f < 9; f++) {
         board.value.grid[r][f] = null;
@@ -896,6 +954,7 @@ export const useGameStore = defineStore('game', () => {
 
   function jumpToStep(step: number) {
     if (step < 0 || step > board.value.history.length) return;
+    updateAiArrow(null, true);
     currentStep.value = step;
     if (autoAnalysis.value || isAnalyzing.value || isStudyAnalyzing.value) {
       triggerAnalysis(false);
@@ -907,7 +966,7 @@ export const useGameStore = defineStore('game', () => {
     if (autoAnalysis.value) {
       triggerAnalysis(false);
     } else {
-      stopAnalysis();
+      stopAnalysis(false);
     }
   }
 
@@ -981,5 +1040,7 @@ export const useGameStore = defineStore('game', () => {
     toggleStudyAnalysis,
     setPieceAt,
     clearBoard,
+    updateAiArrow,
+    activeAnalysisFen,
   };
 });

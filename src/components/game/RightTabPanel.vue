@@ -107,154 +107,172 @@
           </div>
         </div>
 
-        <!-- 快速搜索配置工具条 (V0.3.1 常用参数快捷控制) -->
-        <div class="quick-engine-ctrl">
-          <div class="quick-row">
-            <span class="quick-label">分析模式</span>
-            <div class="quick-btn-group" title="设置右侧 AI 辅助分析的限制条件（对弈模式 AI 走子限制请在高级配置中调整）">
-              <button 
-                class="quick-mode-btn" 
-                :class="{ active: engineSettings.analysisSearchType === 'infinite' }"
-                @click="setQuickSearchType('infinite')"
-              >无限</button>
-              <button 
-                class="quick-mode-btn" 
-                :class="{ active: engineSettings.analysisSearchType === 'depth' }"
-                @click="setQuickSearchType('depth')"
-              >定深</button>
-              <button 
-                class="quick-mode-btn" 
-                :class="{ active: engineSettings.analysisSearchType === 'movetime' }"
-                @click="setQuickSearchType('movetime')"
-              >定时</button>
-              <button 
-                class="quick-mode-btn" 
-                :class="{ active: engineSettings.analysisSearchType === 'nodes' }"
-                @click="setQuickSearchType('nodes')"
-              >节点</button>
-            </div>
-
-            <span class="quick-label quick-multipv-label">候选</span>
-            <div class="quick-btn-group">
-              <button 
-                v-for="pv in [1, 2, 3, 5]" 
-                :key="pv"
-                class="quick-pv-btn" 
-                :class="{ active: engineSettings.multiPv === pv }"
-                @click="setQuickMultiPv(pv)"
-              >{{ pv }}线</button>
-            </div>
-          </div>
-
-          <div v-if="engineSettings.analysisSearchType !== 'infinite'" class="quick-row quick-limit-row">
-            <span class="quick-label">限制</span>
-            <div class="quick-limit-inputs">
-              <template v-if="engineSettings.analysisSearchType === 'depth'">
-                <input 
-                  type="number" 
-                  v-model.number="engineSettings.analysisDepth" 
-                  @change="onQuickParamChange"
-                  min="1" 
-                  max="100" 
-                  class="quick-num-input" 
-                />
-                <span class="quick-unit">层深度</span>
-              </template>
-              <template v-else-if="engineSettings.analysisSearchType === 'movetime'">
-                <input 
-                  type="number" 
-                  :value="engineSettings.analysisMovetimeMs / 1000" 
-                  @input="e => engineSettings.analysisMovetimeMs = Math.round(Number((e.target as HTMLInputElement).value) * 1000)"
-                  @change="onQuickParamChange"
-                  min="0.5" 
-                  max="60" 
-                  step="0.5" 
-                  class="quick-num-input" 
-                />
-                <span class="quick-unit">秒计算</span>
-              </template>
-              <template v-else-if="engineSettings.analysisSearchType === 'nodes'">
-                <input 
-                  type="number" 
-                  :value="Math.round(engineSettings.analysisNodes / 1000)" 
-                  @input="e => engineSettings.analysisNodes = Math.round(Number((e.target as HTMLInputElement).value) * 1000)"
-                  @change="onQuickParamChange"
-                  min="10" 
-                  max="1000000" 
-                  step="100" 
-                  class="quick-num-input" 
-                />
-                <span class="quick-unit">k 节点</span>
-              </template>
-            </div>
-          </div>
-        </div>
-
-        <!-- 专业搜索数据仪表盘 (6项核心指标) -->
-        <div class="stats-grid">
-          <div class="stat-item">
-            <span class="stat-label">搜索深度</span>
-            <span class="stat-val">
-              {{ gameStore.engineInfo.depth }}{{ gameStore.engineInfo.seldepth ? ` / ${gameStore.engineInfo.seldepth}` : '' }} 层
-            </span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">红方视角评分</span>
-            <span class="stat-val highlight" :class="scoreClass">
-              {{ formattedScore }}
-            </span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">算力速率</span>
-            <span class="stat-val">{{ formattedNps }}</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">计算节点</span>
-            <span class="stat-val">{{ formattedNodes }}</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">解算耗时</span>
-            <span class="stat-val">{{ ((gameStore.engineInfo.timeMs || 0) / 1000).toFixed(1) }} s</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">哈希占用率</span>
-            <span class="stat-val">{{ gameStore.engineInfo.hashfull ? (gameStore.engineInfo.hashfull / 10).toFixed(1) + '%' : '-' }}</span>
-          </div>
-        </div>
-
-        <!-- 多候选变化 (MultiPV) 列表 -->
-        <div class="multipv-section">
-          <div class="multipv-header">
-            <span>候选走法对比 (MultiPV)</span>
-            <span class="multipv-sub">{{ candidateLines.length }} 条路线</span>
-          </div>
-
-          <div class="multipv-list">
-            <div 
-              v-for="line in candidateLines" 
-              :key="'pv_' + line.multipv"
-              class="multipv-item"
-              :class="{ selected: gameStore.selectedMultiPv === line.multipv }"
-              @click="gameStore.selectMultiPvLine(line.multipv)"
-            >
-              <div class="multipv-rank-col">
-                <span class="rank-badge">#{{ line.multipv }}</span>
+        <!-- 纵向滚动内容区 (容纳快捷控制、统计指标、候选变化列表) -->
+        <div class="engine-scroll-body">
+          <!-- 快速搜索配置工具条 (分立区域清晰排版) -->
+          <div class="quick-engine-ctrl">
+            <!-- 区域 A：分析模式 -->
+            <div class="ctrl-sub-section">
+              <div class="ctrl-title-row">
+                <span class="quick-label">分析模式</span>
               </div>
-              <div class="multipv-main-col">
-                <div class="multipv-move-row">
-                  <span class="first-move-uci">{{ line.bestMove || (line.pv[0] || '-') }}</span>
-                  <span class="move-score" :class="getLineScoreClass(line)">
-                    {{ formatLineScore(line) }}
-                  </span>
-                </div>
-                <div class="pv-chain-text" :title="line.pv.join(' ')">
-                  {{ line.pv.slice(0, 6).join('  ') || '计算中...' }}
+              <div class="mode-btn-grid" title="设置右侧 AI 辅助分析的限制条件（对弈模式 AI 走子限制请在高级配置中调整）">
+                <button 
+                  class="quick-mode-btn" 
+                  :class="{ active: engineSettings.analysisSearchType === 'infinite' }"
+                  @click="setQuickSearchType('infinite')"
+                >无限</button>
+                <button 
+                  class="quick-mode-btn" 
+                  :class="{ active: engineSettings.analysisSearchType === 'depth' }"
+                  @click="setQuickSearchType('depth')"
+                >定深</button>
+                <button 
+                  class="quick-mode-btn" 
+                  :class="{ active: engineSettings.analysisSearchType === 'movetime' }"
+                  @click="setQuickSearchType('movetime')"
+                >定时</button>
+                <button 
+                  class="quick-mode-btn" 
+                  :class="{ active: engineSettings.analysisSearchType === 'nodes' }"
+                  @click="setQuickSearchType('nodes')"
+                >节点</button>
+              </div>
+            </div>
+
+            <!-- 区域 B：当前搜索限制 (仅在非无限模式显示) -->
+            <div v-if="engineSettings.analysisSearchType !== 'infinite'" class="ctrl-sub-section limit-sub-section">
+              <div class="limit-row">
+                <span class="quick-label limit-label">
+                  {{ engineSettings.analysisSearchType === 'depth' ? '搜索深度限制' : 
+                     engineSettings.analysisSearchType === 'movetime' ? '思考时间限制' : '计算节点限制' }}
+                </span>
+                <div class="quick-limit-inputs">
+                  <template v-if="engineSettings.analysisSearchType === 'depth'">
+                    <input 
+                      type="number" 
+                      v-model.number="engineSettings.analysisDepth" 
+                      @change="onQuickParamChange"
+                      min="1" 
+                      max="100" 
+                      class="quick-num-input" 
+                    />
+                    <span class="quick-unit">层</span>
+                  </template>
+                  <template v-else-if="engineSettings.analysisSearchType === 'movetime'">
+                    <input 
+                      type="number" 
+                      :value="engineSettings.analysisMovetimeMs / 1000" 
+                      @input="e => engineSettings.analysisMovetimeMs = Math.round(Number((e.target as HTMLInputElement).value) * 1000)"
+                      @change="onQuickParamChange"
+                      min="0.5" 
+                      max="60" 
+                      step="0.5" 
+                      class="quick-num-input" 
+                    />
+                    <span class="quick-unit">秒</span>
+                  </template>
+                  <template v-else-if="engineSettings.analysisSearchType === 'nodes'">
+                    <input 
+                      type="number" 
+                      :value="Math.round(engineSettings.analysisNodes / 1000)" 
+                      @input="e => engineSettings.analysisNodes = Math.round(Number((e.target as HTMLInputElement).value) * 1000)"
+                      @change="onQuickParamChange"
+                      min="10" 
+                      max="1000000" 
+                      step="100" 
+                      class="quick-num-input" 
+                    />
+                    <span class="quick-unit">k 节点</span>
+                  </template>
                 </div>
               </div>
             </div>
 
-            <div v-if="candidateLines.length === 0" class="no-pv-hint">
-              {{ gameStore.isAiThinking ? 'AI 正在对弈思考计算中...' : gameStore.isAnalyzing ? '正在展开博弈树计算...' : '点击下方“开始分析”唤醒引擎解算' }}
+            <!-- 区域 C：MultiPV 候选线路 -->
+            <div class="ctrl-sub-section">
+              <div class="ctrl-title-row">
+                <span class="quick-label">候选线路</span>
+                <span class="multipv-hint-badge">{{ engineSettings.multiPv }} 路线并发</span>
+              </div>
+              <div class="multipv-btn-grid">
+                <button 
+                  v-for="pv in [1, 2, 3, 5]" 
+                  :key="pv"
+                  class="quick-pv-btn" 
+                  :class="{ active: engineSettings.multiPv === pv }"
+                  @click="setQuickMultiPv(pv)"
+                >{{ pv }} 线</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 专业搜索数据仪表盘 (自适应 2 列卡片，指标数值完整展示) -->
+          <div class="stats-grid">
+            <div class="stat-item">
+              <span class="stat-label">搜索深度</span>
+              <span class="stat-val">
+                {{ gameStore.engineInfo.depth }}{{ gameStore.engineInfo.seldepth ? ` / ${gameStore.engineInfo.seldepth}` : '' }} 层
+              </span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">红方视角评分</span>
+              <span class="stat-val highlight" :class="scoreClass">
+                {{ formattedScore }}
+              </span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">算力速率</span>
+              <span class="stat-val">{{ formattedNps }}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">计算节点</span>
+              <span class="stat-val">{{ formattedNodes }}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">解算耗时</span>
+              <span class="stat-val">{{ ((gameStore.engineInfo.timeMs || 0) / 1000).toFixed(1) }} s</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">哈希占用率</span>
+              <span class="stat-val">{{ gameStore.engineInfo.hashfull ? (gameStore.engineInfo.hashfull / 10).toFixed(1) + '%' : '-' }}</span>
+            </div>
+          </div>
+
+          <!-- 多候选变化 (MultiPV) 列表 -->
+          <div class="multipv-section">
+            <div class="multipv-header">
+              <span>候选走法对比 (MultiPV)</span>
+              <span class="multipv-sub">{{ candidateLines.length }} 条路线</span>
+            </div>
+
+            <div class="multipv-list">
+              <div 
+                v-for="line in candidateLines" 
+                :key="'pv_' + line.multipv"
+                class="multipv-item"
+                :class="{ selected: gameStore.selectedMultiPv === line.multipv }"
+                @click="gameStore.selectMultiPvLine(line.multipv)"
+              >
+                <div class="multipv-rank-col">
+                  <span class="rank-badge">#{{ line.multipv }}</span>
+                </div>
+                <div class="multipv-main-col">
+                  <div class="multipv-move-row">
+                    <span class="first-move-uci">{{ line.bestMove || (line.pv[0] || '-') }}</span>
+                    <span class="move-score" :class="getLineScoreClass(line)">
+                      {{ formatLineScore(line) }}
+                    </span>
+                  </div>
+                  <div class="pv-chain-text" :title="line.pv.join(' ')">
+                    {{ line.pv.slice(0, 6).join('  ') || '计算中...' }}
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="candidateLines.length === 0" class="no-pv-hint">
+                {{ gameStore.isAiThinking ? 'AI 正在对弈思考计算中...' : gameStore.isAnalyzing ? '正在展开博弈树计算...' : '点击下方“开始分析”唤醒引擎解算' }}
+              </div>
             </div>
           </div>
         </div>
@@ -700,8 +718,10 @@ function loadCustomFen() {
 .engine-info-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .engine-card-header {
@@ -769,115 +789,213 @@ function loadCustomFen() {
   color: #ffd700;
 }
 
-/* Quick Engine Controls (V0.3.1) */
+/* 纵向滚动内容区 (包含快捷控制、统计指标、候选走法) */
+.engine-scroll-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.engine-scroll-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.engine-scroll-body::-webkit-scrollbar-thumb {
+  background: #4a2c16;
+  border-radius: 2px;
+}
+
+/* Quick Engine Controls (重构为独立分区布局) */
 .quick-engine-ctrl {
   background: rgba(18, 9, 5, 0.75);
   border: 1px solid #4a2914;
-  border-radius: 6px;
-  padding: 6px 8px;
+  border-radius: 8px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
-.quick-row {
+.ctrl-sub-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ctrl-title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
 }
 
 .quick-label {
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 500;
   color: #a88d74;
   white-space: nowrap;
-  min-width: 24px;
 }
 
-.quick-multipv-label {
-  margin-left: auto;
+.multipv-hint-badge {
+  font-size: 10px;
+  color: #d4af37;
+  font-weight: 500;
 }
 
-.quick-btn-group {
-  display: flex;
-  gap: 3px;
+/* 独立四列按钮组：支持窄屏自动两列折行 */
+.mode-btn-grid,
+.multipv-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
 }
 
-.quick-mode-btn, .quick-pv-btn {
+@media (max-width: 240px) {
+  .mode-btn-grid,
+  .multipv-btn-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.quick-mode-btn, 
+.quick-pv-btn {
   background: #241309;
   border: 1px solid #452410;
-  border-radius: 3px;
+  border-radius: 4px;
   color: #eed6b3;
-  font-size: 10px;
-  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 2px;
+  text-align: center;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
+  user-select: none;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
-.quick-mode-btn:hover, .quick-pv-btn:hover {
+.quick-mode-btn:hover, 
+.quick-pv-btn:hover {
   border-color: #a87232;
   color: #ffd700;
+  background: #331a0d;
 }
 
-.quick-mode-btn.active, .quick-pv-btn.active {
-  background: #61280d;
+.quick-mode-btn.active, 
+.quick-pv-btn.active {
+  background: linear-gradient(180deg, #6e2e0e 0%, #4a1c07 100%);
   border-color: #d4af37;
   color: #ffd700;
   font-weight: bold;
+  box-shadow: 0 1px 4px rgba(212, 175, 55, 0.2);
+}
+
+/* 搜索限制参数区 */
+.limit-sub-section {
+  background: rgba(30, 15, 8, 0.6);
+  border: 1px solid #3d2313;
+  border-radius: 5px;
+  padding: 5px 8px;
+}
+
+.limit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.limit-label {
+  color: #eed6b3;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .quick-limit-inputs {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 .quick-num-input {
-  width: 52px;
-  background: #120703;
-  border: 1px solid #4a2814;
-  border-radius: 3px;
+  width: 58px;
+  background: #0f0603;
+  border: 1px solid #5a341a;
+  border-radius: 4px;
   color: #ffd700;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: bold;
-  padding: 2px 4px;
+  padding: 3px 6px;
   text-align: center;
+  outline: none;
+  transition: all 0.2s;
+  box-sizing: border-box;
+}
+
+.quick-num-input:focus {
+  border-color: #d4af37;
+  box-shadow: 0 0 5px rgba(212, 175, 55, 0.35);
 }
 
 .quick-unit {
-  font-size: 10px;
-  color: #8c6f54;
+  font-size: 11px;
+  color: #a88d74;
+  white-space: nowrap;
 }
 
+/* 专业搜索数据仪表盘 (自适应 2 列卡片，数值完全展示) */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .stat-item {
-  background: rgba(18, 9, 5, 0.6);
+  background: rgba(18, 9, 5, 0.65);
   border: 1px solid #3d2313;
-  padding: 5px 6px;
+  padding: 6px 8px;
   border-radius: 6px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.stat-item:hover {
+  border-color: #5a341a;
 }
 
 .stat-label {
-  font-size: 9px;
+  font-size: 10px;
   color: #8c6f54;
-}
-
-.stat-val {
-  font-size: 11px;
-  font-weight: 600;
-  color: #eed6b3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.stat-val {
+  font-size: 12px;
+  font-weight: 700;
+  color: #eed6b3;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+}
+
+.stat-val.highlight {
+  color: #ffd700;
 }
 
 .stat-val.text-red {
@@ -890,19 +1008,20 @@ function loadCustomFen() {
 
 /* MultiPV Section */
 .multipv-section {
-  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-height: 120px;
-  overflow: hidden;
+  flex: 1;
 }
 
 .multipv-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-size: 11px;
   color: #a88d74;
+  flex-shrink: 0;
 }
 
 .multipv-sub {
@@ -920,6 +1039,7 @@ function loadCustomFen() {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 80px;
 }
 
 .multipv-item {

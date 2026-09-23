@@ -113,8 +113,10 @@ onMounted(() => {
 .panel-wrapper {
   flex: 1;
   height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
   box-sizing: border-box;
 }
 
@@ -135,9 +137,9 @@ onMounted(() => {
   width: 28px;
 }
 
-/* 右侧面板宽度 */
+/* 右侧面板宽度：预留充裕空间给 AI 分析指标与多候选路线 */
 .column-right {
-  width: 320px;
+  width: 325px;
 }
 .column-right.collapsed {
   width: 28px;

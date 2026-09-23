@@ -9,7 +9,7 @@
         :last-move="gameStore.lastMove"
         :in-check-king-pos="gameStore.inCheckKingPos"
         :flipped="gameStore.flipped"
-        :ai-arrow="gameStore.aiArrow"
+        :ai-arrow="gameStore.isStudyAnalyzing ? gameStore.aiArrow : null"
         @select="onBoardSelect"
         @move="onBoardMove"
       />
