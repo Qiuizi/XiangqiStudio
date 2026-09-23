@@ -157,25 +157,68 @@ export const useGameStore = defineStore('game', () => {
     return true; // replay
   });
 
-  // Recommended arrow computed from selected MultiPV line, or bestMove, or PV
-  const aiArrow = computed(() => {
-    let moveStr: string | null = null;
-    if (selectedMultiPv.value > 1) {
-      const line = engineInfo.value.multipvLines.find(l => l.multipv === selectedMultiPv.value);
-      if (line && line.bestMove) {
-        moveStr = line.bestMove;
+  // Stabilized recommended arrow state
+  const displayedAiArrow = ref<{ from: Position; to: Position } | null>(null);
+  let lastArrowUpdate = 0;
+  let pendingArrowTimer: any = null;
+  let currentArrowMoveStr: string | null = null;
+
+  function updateAiArrow(moveStr: string | null, forceImmediate: boolean = false) {
+    if (!moveStr || moveStr.length < 4) {
+      if (pendingArrowTimer) {
+        clearTimeout(pendingArrowTimer);
+        pendingArrowTimer = null;
       }
+      currentArrowMoveStr = null;
+      displayedAiArrow.value = null;
+      return;
     }
-    if (!moveStr) {
-      moveStr = engineInfo.value.bestMove || (engineInfo.value.pv.length > 0 ? engineInfo.value.pv[0] : null);
+
+    if (moveStr === currentArrowMoveStr && displayedAiArrow.value !== null) {
+      return;
     }
-    if (!moveStr || moveStr.length < 4) return null;
+
+    let parsed: { from: Position; to: Position } | null = null;
     try {
-      return parseUciMove(moveStr);
+      parsed = parseUciMove(moveStr);
     } catch {
-      return null;
+      return;
     }
-  });
+    if (!parsed) return;
+
+    const now = Date.now();
+    const elapsed = now - lastArrowUpdate;
+
+    // Minimum 250ms visual stability window to eliminate directional twitching & flicker,
+    // while updating immediately when search finishes or user selects a different MultiPV line.
+    if (forceImmediate || displayedAiArrow.value === null || elapsed >= 250) {
+      if (pendingArrowTimer) {
+        clearTimeout(pendingArrowTimer);
+        pendingArrowTimer = null;
+      }
+      currentArrowMoveStr = moveStr;
+      displayedAiArrow.value = parsed;
+      lastArrowUpdate = now;
+    } else if (!pendingArrowTimer) {
+      currentArrowMoveStr = moveStr;
+      pendingArrowTimer = setTimeout(() => {
+        pendingArrowTimer = null;
+        if (currentArrowMoveStr) {
+          try {
+            displayedAiArrow.value = parseUciMove(currentArrowMoveStr);
+            lastArrowUpdate = Date.now();
+          } catch {
+            // ignore parse error
+          }
+        }
+      }, 250 - elapsed);
+    } else {
+      currentArrowMoveStr = moveStr;
+    }
+  }
+
+  // Recommended arrow computed reading stabilized state
+  const aiArrow = computed(() => displayedAiArrow.value);
 
   function clearAiWatchdog() {
     if (aiWatchdogTimer) {
@@ -303,6 +346,19 @@ export const useGameStore = defineStore('game', () => {
             engineInfo.value.bestMove = payload.pv[0];
           }
         }
+
+        // Determine recommended move based on MultiPV selection
+        let targetMoveStr: string | null = null;
+        if (selectedMultiPv.value > 1) {
+          const line = engineInfo.value.multipvLines.find(l => l.multipv === selectedMultiPv.value);
+          targetMoveStr = line?.bestMove || null;
+        } else {
+          targetMoveStr = engineInfo.value.bestMove || (engineInfo.value.pv.length > 0 ? engineInfo.value.pv[0] : null);
+        }
+
+        if (targetMoveStr) {
+          updateAiArrow(targetMoveStr, false);
+        }
       });
 
       await listen<{ search_id: number; is_ai_move: boolean; bestmove: string }>('engine-bestmove', (e) => {
@@ -314,6 +370,7 @@ export const useGameStore = defineStore('game', () => {
             isAiThinking.value = false;
             activeAiSearchId.value = null;
             engineInfo.value.bestMove = bestmove;
+            updateAiArrow(null, true);
             executeAiMove(bestmove);
           }
           return;
@@ -324,6 +381,9 @@ export const useGameStore = defineStore('game', () => {
           return;
         }
         engineInfo.value.bestMove = bestmove;
+        if (selectedMultiPv.value <= 1) {
+          updateAiArrow(bestmove, true);
+        }
         isAnalyzing.value = false;
       });
 
@@ -409,6 +469,7 @@ export const useGameStore = defineStore('game', () => {
       engineInfo.value.multipvLines = [];
 
       if (isAiMoveRequest) {
+        updateAiArrow(null, true);
         activeAiSearchId.value = searchId;
 
         // Setup watchdog timer
@@ -839,6 +900,14 @@ export const useGameStore = defineStore('game', () => {
 
   function selectMultiPvLine(lineIndex: number) {
     selectedMultiPv.value = lineIndex;
+    const line = engineInfo.value.multipvLines.find(l => l.multipv === lineIndex);
+    let moveStr = line?.bestMove || null;
+    if (!moveStr && lineIndex === 1) {
+      moveStr = engineInfo.value.bestMove || (engineInfo.value.pv.length > 0 ? engineInfo.value.pv[0] : null);
+    }
+    if (moveStr) {
+      updateAiArrow(moveStr, true);
+    }
   }
 
   return {

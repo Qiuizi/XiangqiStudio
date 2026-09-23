@@ -403,8 +403,9 @@ pub async fn start_engine_internal(
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
-        let mut last_info_emit = Instant::now();
-        let mut last_emitted_depth: u32 = 0;
+        let mut last_info_emit_by_pv: std::collections::HashMap<u32, Instant> = std::collections::HashMap::new();
+        let mut latest_info_by_pv: std::collections::HashMap<u32, EngineInfoPayload> = std::collections::HashMap::new();
+        let mut tracked_search_id: u64 = 0;
 
         while let Ok(Some(line)) = lines.next_line().await {
             let trimmed = line.trim();
@@ -462,15 +463,30 @@ pub async fn start_engine_internal(
 
                     if let Some(active) = active_opt {
                         if !active.aborted {
+                            // If a new search ID has started, reset per-search MultiPV tracking
+                            if active.search_id != tracked_search_id {
+                                tracked_search_id = active.search_id;
+                                last_info_emit_by_pv.clear();
+                                latest_info_by_pv.clear();
+                            }
+
                             payload.search_id = active.search_id;
+                            let line_num = payload.multipv.unwrap_or(1);
+                            latest_info_by_pv.insert(line_num, payload.clone());
+
                             let now = Instant::now();
-                            let is_new_depth = payload.depth > last_emitted_depth;
-                            // Throttle high-frequency info output: emit if 60ms elapsed or new depth
-                            if is_new_depth || now.duration_since(last_info_emit) >= Duration::from_millis(60) {
-                                last_info_emit = now;
-                                if is_new_depth {
-                                    last_emitted_depth = payload.depth;
-                                }
+                            let last_emit = last_info_emit_by_pv.get(&line_num).copied();
+
+                            // Per-MultiPV independent throttling (80ms minimum interval per line)
+                            // Guarantees all MultiPV lines (1, 2, ...) have equal emit opportunities
+                            // and completely eliminates starvation of MultiPV 2+.
+                            let should_emit = match last_emit {
+                                None => true,
+                                Some(prev_time) => now.duration_since(prev_time) >= Duration::from_millis(80),
+                            };
+
+                            if should_emit {
+                                last_info_emit_by_pv.insert(line_num, now);
                                 let _ = app_clone.emit("engine-info", payload);
                             }
                         }
@@ -488,7 +504,14 @@ pub async fn start_engine_internal(
                     let notify = st.stop_notify.clone();
                     drop(st);
 
-                    last_emitted_depth = 0;
+                    // Flush any pending latest MultiPV lines before emitting bestmove
+                    for (line_num, cached_payload) in latest_info_by_pv.drain() {
+                        let last_emit = last_info_emit_by_pv.get(&line_num);
+                        if last_emit.map_or(true, |t| t.elapsed() >= Duration::from_millis(30)) {
+                            let _ = app_clone.emit("engine-info", cached_payload);
+                        }
+                    }
+                    last_info_emit_by_pv.clear();
 
                     // Notify any legacy thread waiting for the engine to stop
                     notify.notify_waiters();

@@ -73,7 +73,7 @@
           cy="50" 
           r="34" 
           fill="none" 
-          stroke="url(#goldRim_{{ piece.id }})" 
+          :stroke="'url(#goldRim_' + piece.id + ')'" 
           stroke-width="0.7" 
           stroke-opacity="0.4" 
         />

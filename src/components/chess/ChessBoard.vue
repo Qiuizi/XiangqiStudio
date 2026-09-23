@@ -504,7 +504,9 @@ function updateDimensions() {
 
   // 保证合理的最小可点击尺寸（260px），不设人为上限，完全由容器可用宽高自适应撑满！
   targetW = Math.max(260, targetW);
-  stageWidth.value = targetW;
+  if (targetW !== stageWidth.value) {
+    stageWidth.value = targetW;
+  }
 }
 
 function onResizeNotify() {
