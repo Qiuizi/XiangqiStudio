@@ -24,3 +24,4 @@ dist-ssr
 *.sw?
 target/
 src-tauri/target/
+release_dist/
