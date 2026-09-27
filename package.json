@@ -25,10 +25,5 @@
     "vite": "^8.0.16",
     "vitest": "^5.0.1",
     "vue-tsc": "^3.3.5"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "protobufjs"
-    ]
   }
 }

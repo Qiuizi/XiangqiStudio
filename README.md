@@ -1,40 +1,58 @@
 # Xiangqi Studio
 
-A local Chinese chess analysis application powered by Pikafish engine.
+A local Chinese chess analysis workstation powered by the Pikafish engine.
 
-**Version 1.0.0 — First stable release**
+Xiangqi Studio 是一个基于 Pikafish 引擎的本地中国象棋分析工作站。
+
+**Current version: v1.0.0 — First stable release**
 
 ## Features
 
-- Local AI engine
-- Pikafish integration
-- Human vs AI
+- Human vs. AI play
+- Deep local engine analysis
+- MultiPV candidate-line analysis
 - Endgame study
-- Replay and variation analysis
-- MultiPV analysis
-- Engine configuration
+- Game replay and move-by-move study
+- Variation tree for exploring alternate lines
+- FEN import and export
+- Local Pikafish engine and configurable engine options
 
 ## Screenshots
 
-Screenshots will be published in [`docs/images/`](docs/images/).
+There are no product screenshots in the repository yet. Genuine screenshots can be added to [`docs/images/`](docs/images/).
+
+- Home screen — reserved
+- Human vs. AI board — reserved
+- Engine analysis — reserved
+- Replay and variations — reserved
 
 ## Architecture
 
 - **Frontend:** Vue 3 + TypeScript
-- **Desktop:** Tauri 2 + Rust
+- **Desktop:** Tauri 2
+- **Backend:** Rust
 - **Engine:** Pikafish, running locally
 
 ## Installation
 
-On Windows, download the installer (`.exe`) from the [GitHub Releases](https://github.com/Qiuizi/XiangqiStudio/releases) page.
+**Windows:** Download the [v1.0.0 installer](https://github.com/Qiuizi/XiangqiStudio/releases/download/v1.0.0/xiangqistudio_1.0.0_x64-setup.exe), or browse [all GitHub Releases](https://github.com/Qiuizi/XiangqiStudio/releases).
 
 ## Development
 
-Requirements: Node.js, pnpm, and the Rust toolchain required by Tauri 2.
+Requirements: Node.js 24, pnpm 11, and the Rust toolchain and platform dependencies required by Tauri 2.
 
 ```bash
+git clone https://github.com/Qiuizi/XiangqiStudio.git
+cd XiangqiStudio
 pnpm install
-pnpm dev
+pnpm test
+pnpm build
+```
+
+To run the desktop application in development mode or build a desktop release:
+
+```bash
+pnpm tauri dev
 pnpm tauri build
 ```
 
