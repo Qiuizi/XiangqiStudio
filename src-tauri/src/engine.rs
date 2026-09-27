@@ -693,6 +693,75 @@ pub async fn wait_for_idle(mut rx: watch::Receiver<SearchPhase>, timeout_dur: Du
     }
 }
 
+pub fn validate_fen_for_engine(fen: &str) -> Result<(), String> {
+    let clean = fen.trim();
+    if clean.is_empty() {
+        return Err("FEN 字符串不能为空".to_string());
+    }
+    let parts: Vec<&str> = clean.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err("FEN 格式错误".to_string());
+    }
+    let rows: Vec<&str> = parts[0].split('/').collect();
+    if rows.len() != 10 {
+        return Err(format!("FEN 行数错误: 期望 10 行，实际 {} 行", rows.len()));
+    }
+    let mut red_k = 0;
+    let mut black_k = 0;
+    let mut counts: HashMap<char, usize> = HashMap::new();
+    let mut total_pieces = 0;
+
+    for (r_idx, row) in rows.iter().enumerate() {
+        let mut col_count = 0;
+        for ch in row.chars() {
+            if ch.is_ascii_digit() {
+                let d = ch.to_digit(10).unwrap() as usize;
+                if d < 1 || d > 9 {
+                    return Err(format!("第 {} 行数字非法: {}", r_idx + 1, d));
+                }
+                col_count += d;
+            } else if "kabnrcpKABNRCP".contains(ch) {
+                col_count += 1;
+                total_pieces += 1;
+                *counts.entry(ch).or_insert(0) += 1;
+                if ch == 'K' { red_k += 1; }
+                if ch == 'k' { black_k += 1; }
+            } else {
+                return Err(format!("第 {} 行含有非法字符: {}", r_idx + 1, ch));
+            }
+        }
+        if col_count != 9 {
+            return Err(format!("第 {} 行总列数错误: 期望 9 列，实际 {} 列", r_idx + 1, col_count));
+        }
+    }
+
+    if red_k != 1 {
+        return Err(format!("红帅数量非法: 必须恰有 1 个，实际 {} 个", red_k));
+    }
+    if black_k != 1 {
+        return Err(format!("黑将数量非法: 必须恰有 1 个，实际 {} 个", black_k));
+    }
+
+    if *counts.get(&'R').unwrap_or(&0) > 2 { return Err("红车数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'r').unwrap_or(&0) > 2 { return Err("黑车数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'N').unwrap_or(&0) > 2 { return Err("红马数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'n').unwrap_or(&0) > 2 { return Err("黑马数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'C').unwrap_or(&0) > 2 { return Err("红炮数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'c').unwrap_or(&0) > 2 { return Err("黑炮数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'B').unwrap_or(&0) > 2 { return Err("红相数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'b').unwrap_or(&0) > 2 { return Err("黑象数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'A').unwrap_or(&0) > 2 { return Err("红仕数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'a').unwrap_or(&0) > 2 { return Err("黑士数量超限 (最多 2 个)".into()); }
+    if *counts.get(&'P').unwrap_or(&0) > 5 { return Err("红兵数量超限 (最多 5 个)".into()); }
+    if *counts.get(&'p').unwrap_or(&0) > 5 { return Err("黑卒数量超限 (最多 5 个)".into()); }
+
+    if total_pieces > 32 {
+        return Err(format!("棋子总数超限: 最多 32 个，实际 {} 个", total_pieces));
+    }
+
+    Ok(())
+}
+
 pub async fn search_position_internal(
     shared: SharedEngine,
     fen: String,
@@ -704,6 +773,12 @@ pub async fn search_position_internal(
     is_ai_move: bool,
     search_id_opt: Option<u64>,
 ) -> Result<u64, String> {
+    // 0. Safety Boundary: Validate FEN before touching engine
+    if let Err(err_msg) = validate_fen_for_engine(&fen) {
+        eprintln!("[UCI Safety Boundary] Refusing search on invalid FEN: {}", err_msg);
+        return Err(format!("引擎安全边界拦截: {}", err_msg));
+    }
+
     // 1. If currently searching or stopping, cleanly abort and wait for engine to reach Idle
     let phase_rx = {
         let mut state = shared.lock().await;

@@ -193,7 +193,7 @@ const isUserTurn = computed(() => {
 
 ### 1. 产物路径
 * 最终免安装 Release 可执行程序：
-  `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\xiangqistudio.exe`
+  `<project-root>\src-tauri\target\release\xiangqistudio.exe`
 * 引擎与权重文件就绪状态：
   `src-tauri/resources/pikafish-bmi2.exe` (已嵌入并正确引用)
   `src-tauri/resources/pikafish.nnue` (已嵌入并正确引用)

@@ -160,7 +160,7 @@ if is_new_depth || now.duration_since(last_info_emit) >= Duration::from_millis(6
 ## 六、第五优先级：用户实际保存配置的真实提取与性能基准测试
 
 ### 1. 从用户机器的实际 WebView2 LevelDB 中提取的真实配置
-通过读取 `C:\Users\123\AppData\Local\com.xiangqi.studio\EBWebView\Default\Local Storage\leveldb\000003.log`，提取到用户当前保存生效的完整配置：
+通过读取 `%LOCALAPPDATA%\com.xiangqi.studio\EBWebView\Default\Local Storage\leveldb\000003.log`，提取到用户当前保存生效的完整配置：
 ```json
 {
   "threads": 10,
@@ -238,7 +238,7 @@ if is_new_depth || now.duration_since(last_info_emit) >= Duration::from_millis(6
 ## 八、最终交付产物与验证
 
 1. **Release 可执行程序**：  
-   `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\xiangqistudio.exe`
+   `<project-root>\src-tauri\target\release\xiangqistudio.exe`
 2. **伴随引擎资源就绪**：  
    `src-tauri/target/release/resources/pikafish-bmi2.exe`  
    `src-tauri/target/release/resources/pikafish.nnue`

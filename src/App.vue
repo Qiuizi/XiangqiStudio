@@ -17,23 +17,26 @@
 
       <ReplayView 
         v-else-if="currentView === 'replay'" 
+        @change-view="onHeaderChangeView"
       />
 
       <StudyView 
         v-else-if="currentView === 'study'" 
+        @change-view="onHeaderChangeView"
       />
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, defineAsyncComponent, onMounted } from 'vue';
 import { useGameStore } from './stores/gameStore';
 import AppHeader from './components/layout/AppHeader.vue';
 import LobbyView from './views/LobbyView.vue';
 import GameView from './views/GameView.vue';
-import ReplayView from './views/ReplayView.vue';
-import StudyView from './views/StudyView.vue';
+
+const ReplayView = defineAsyncComponent(() => import('./views/ReplayView.vue'));
+const StudyView = defineAsyncComponent(() => import('./views/StudyView.vue'));
 
 type AppView = 'lobby' | 'game' | 'replay' | 'study';
 

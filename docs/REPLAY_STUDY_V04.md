@@ -142,11 +142,11 @@ export interface ReplayNode {
   * 耗时：464ms，0 错误，0 警告。
 * **Windows Tauri Release 生产构建**：
   * 独立可执行程序路径：
-    `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\xiangqistudio.exe`
+    `<project-root>\src-tauri\target\release\xiangqistudio.exe`
   * NSIS 安装包路径（推荐安装）：
-    `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\bundle\nsis\xiangqistudio_0.1.0_x64-setup.exe`
+    `<project-root>\src-tauri\target\release\bundle\nsis\xiangqistudio_0.1.0_x64-setup.exe`
   * MSI 安装包路径：
-    `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\bundle\msi\xiangqistudio_0.1.0_x64_en-US.msi`
+    `<project-root>\src-tauri\target\release\bundle\msi\xiangqistudio_0.1.0_x64_en-US.msi`
 
 ---
 

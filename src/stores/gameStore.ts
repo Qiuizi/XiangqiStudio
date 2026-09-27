@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { XiangqiBoard } from '../core/chess/board';
 import { sound } from '../core/sound';
 import { INITIAL_FEN, parseUciMove } from '../core/chess/fen';
+import { validatePositionBeforeEngine } from '../core/chess/validation';
 import type { PieceColor, PieceType, Position } from '../core/chess/types';
 import { useEngineSettingsStore, type UciOptionMeta } from './engineSettingsStore';
 
@@ -74,8 +75,9 @@ export const useGameStore = defineStore('game', () => {
   const engineStatusText = ref('未就绪');
   const autoAnalysis = ref(false);
 
-  // AI Watchdog Timer
+  // AI & Analysis Watchdog Timers
   let aiWatchdogTimer: any = null;
+  let analysisWatchdogTimer: any = null;
 
   const engineInfo = ref<EngineInfo>({
     depth: 0,
@@ -240,6 +242,13 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  function clearAnalysisWatchdog() {
+    if (analysisWatchdogTimer) {
+      clearTimeout(analysisWatchdogTimer);
+      analysisWatchdogTimer = null;
+    }
+  }
+
   function handleAiFailure(reason: string) {
     clearAiWatchdog();
     isAiThinking.value = false;
@@ -286,13 +295,20 @@ export const useGameStore = defineStore('game', () => {
           isEngineReady.value = false;
           isAiThinking.value = false;
           isAnalyzing.value = false;
+          isStudyAnalyzing.value = false;
           clearAiWatchdog();
+          clearAnalysisWatchdog();
+          activeAnalysisFen.value = null;
+          updateAiArrow(null, true);
           engineStatusText.value = '引擎已停止';
           if (
             (gameMode.value === 'pve' && activeColor.value !== playerSide.value) ||
             (gameMode.value === 'study' && studySubMode.value === 'battle' && activeColor.value !== playerSide.value)
           ) {
             handleAiFailure('引擎进程已退出');
+          } else if (gameMode.value === 'study') {
+            isEngineError.value = true;
+            engineErrorMsg.value = '引擎已停止运行，请点击重新启动引擎。';
           }
         }
       });
@@ -302,6 +318,9 @@ export const useGameStore = defineStore('game', () => {
         if (!currentSearchId.value || (payload.search_id && payload.search_id !== currentSearchId.value)) {
           return;
         }
+
+        // Active feedback received from engine - clear watchdog
+        clearAnalysisWatchdog();
 
         // Auxiliary analysis guard: reject stale info if analysis is inactive or board FEN changed
         if (!isAiThinking.value) {
@@ -432,6 +451,24 @@ export const useGameStore = defineStore('game', () => {
 
   // Trigger search on current board position
   async function triggerAnalysis(isAiMoveRequest: boolean = false) {
+    const fen = board.value.getFen();
+
+    // 0. Safety Boundary: Validate position before sending to Pikafish
+    const validation = validatePositionBeforeEngine(fen);
+    if (!validation.valid) {
+      console.warn('[Pikafish Safety] Refused invalid position:', validation.reason);
+      isAnalyzing.value = false;
+      isStudyAnalyzing.value = false;
+      isAiThinking.value = false;
+      clearAiWatchdog();
+      clearAnalysisWatchdog();
+      updateAiArrow(null, true);
+      isEngineError.value = true;
+      engineErrorMsg.value = `当前局面无法由 Pikafish 正常分析: ${validation.reason}。请检查棋盘或手动修正。`;
+      engineStatusText.value = '局面不符合引擎规则';
+      return;
+    }
+
     if (!isTauri() || !isEngineReady.value) return;
 
     // Avoid conflicting manual analysis if AI is calculating next move
@@ -453,11 +490,12 @@ export const useGameStore = defineStore('game', () => {
       engineStatusText.value = '皮卡鱼思考中...';
     } else {
       isAnalyzing.value = true;
+      isEngineError.value = false;
+      engineErrorMsg.value = null;
       engineStatusText.value = '实时分析中...';
     }
 
     try {
-      const fen = board.value.getFen();
       let searchType: string;
       let limitValue: number | null = null;
       let expectedTimeMs = 2000;
@@ -502,7 +540,7 @@ export const useGameStore = defineStore('game', () => {
         activeAiSearchId.value = searchId;
         activeAnalysisFen.value = null;
 
-        // Setup watchdog timer
+        // Setup AI watchdog timer
         clearAiWatchdog();
         const timeoutMs = Math.max(8000, expectedTimeMs + 6000);
         aiWatchdogTimer = setTimeout(() => {
@@ -513,6 +551,26 @@ export const useGameStore = defineStore('game', () => {
       } else {
         activeAnalysisFen.value = fen;
         updateAiArrow(null, true);
+
+        // Setup analysis watchdog timer (6s)
+        clearAnalysisWatchdog();
+        const analysisTimeoutMs = 6000;
+        analysisWatchdogTimer = setTimeout(async () => {
+          if ((isAnalyzing.value || isStudyAnalyzing.value) && currentSearchId.value === searchId) {
+            console.warn(`[Analysis Watchdog] No engine feedback received for search ${searchId} in ${analysisTimeoutMs}ms. Recovering...`);
+            await stopAnalysis(true);
+            isStudyAnalyzing.value = false;
+            isAnalyzing.value = false;
+            updateAiArrow(null, true);
+            isEngineError.value = true;
+            engineErrorMsg.value = '当前局面无法由 Pikafish 正常分析（未收到引擎计算反馈），请检查棋盘识别结果。';
+            engineStatusText.value = '分析未响应';
+            if (!isEngineReady.value) {
+              const settings = useEngineSettingsStore();
+              await settings.restartEngine();
+            }
+          }
+        }, analysisTimeoutMs);
       }
 
       console.log(`[AI Flow] invoke search_position: searchId=${searchId}, isAiMove=${isAiMoveRequest}, type=${searchType}, limit=${limitValue}, FEN='${fen}'`);
@@ -526,15 +584,21 @@ export const useGameStore = defineStore('game', () => {
       });
     } catch (err: any) {
       console.error('Search error:', err);
+      clearAnalysisWatchdog();
       if (isAiMoveRequest) {
         handleAiFailure(String(err));
       } else {
         isAnalyzing.value = false;
+        isStudyAnalyzing.value = false;
+        isEngineError.value = true;
+        engineErrorMsg.value = `引擎启动分析失败: ${String(err?.message || err)}`;
+        engineStatusText.value = '分析启动失败';
       }
     }
   }
 
   async function stopAnalysis(forceStopAi: boolean = false) {
+    clearAnalysisWatchdog();
     updateAiArrow(null, true);
     activeAnalysisFen.value = null;
     isAnalyzing.value = false;
@@ -871,11 +935,15 @@ export const useGameStore = defineStore('game', () => {
   }
 
   async function resetToPreset(fen: string = INITIAL_FEN) {
+    clearAiWatchdog();
+    clearAnalysisWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
       await stopAnalysis(true);
     } else {
       updateAiArrow(null, true);
     }
+    isStudyAnalyzing.value = false;
+    activeAnalysisFen.value = null;
     board.value.reset(fen);
     boardVersion.value++;
     selectedPos.value = null;
@@ -888,8 +956,52 @@ export const useGameStore = defineStore('game', () => {
     engineErrorMsg.value = null;
     if (gameMode.value === 'study' && studySubMode.value === 'battle') {
       checkAiTurn();
-    } else if (isStudyAnalyzing.value) {
-      triggerAnalysis(false);
+    }
+  }
+
+  async function importNewPosition(fen: string, color?: PieceColor) {
+    clearAiWatchdog();
+    clearAnalysisWatchdog();
+    if (isAiThinking.value || isAnalyzing.value) {
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
+    }
+    isStudyAnalyzing.value = false;
+    activeAnalysisFen.value = null;
+    currentSearchId.value = 0;
+
+    engineInfo.value = {
+      depth: 0,
+      scoreCp: null,
+      scoreMate: null,
+      nodes: 0,
+      nps: 0,
+      pv: [],
+      bestMove: null,
+      multipvLines: [],
+    };
+    selectedMultiPv.value = 1;
+    isEngineError.value = false;
+    engineErrorMsg.value = null;
+
+    board.value.reset(fen);
+    if (color) {
+      board.value.activeColor = color;
+    }
+    boardVersion.value++;
+    selectedPos.value = null;
+    legalTargets.value = [];
+    board.value.history = [];
+    currentStep.value = 0;
+
+    const validation = validatePositionBeforeEngine(board.value.getFen());
+    if (!validation.valid) {
+      isEngineError.value = true;
+      engineErrorMsg.value = `局面提示: ${validation.reason}。进入“开启皮卡鱼深度解局”前请先在棋盘上修正。`;
+      engineStatusText.value = '局面待核对修正';
+    } else {
+      engineStatusText.value = '局面已就绪，点击“开启皮卡鱼深度解局”开始分析';
     }
   }
 
@@ -913,10 +1025,25 @@ export const useGameStore = defineStore('game', () => {
   }
 
   async function toggleStudyAnalysis() {
-    isStudyAnalyzing.value = !isStudyAnalyzing.value;
-    if (isStudyAnalyzing.value) {
+    if (!isStudyAnalyzing.value) {
+      const fen = board.value.getFen();
+      const validation = validatePositionBeforeEngine(fen);
+      if (!validation.valid) {
+        isStudyAnalyzing.value = false;
+        isAnalyzing.value = false;
+        isAiThinking.value = false;
+        clearAiWatchdog();
+        clearAnalysisWatchdog();
+        updateAiArrow(null, true);
+        isEngineError.value = true;
+        engineErrorMsg.value = `当前局面无法由 Pikafish 正常分析: ${validation.reason}。请检查棋盘或手动修正。`;
+        engineStatusText.value = '局面不符合引擎规则';
+        return;
+      }
+      isStudyAnalyzing.value = true;
       triggerAnalysis(false);
     } else {
+      isStudyAnalyzing.value = false;
       await stopAnalysis(false);
     }
   }
@@ -1035,6 +1162,7 @@ export const useGameStore = defineStore('game', () => {
     setStudySubMode,
     setActiveColor,
     resetToPreset,
+    importNewPosition,
     loadCustomFen,
     triggerStudyAiMove,
     toggleStudyAnalysis,

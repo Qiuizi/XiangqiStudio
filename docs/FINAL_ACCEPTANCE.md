@@ -8,11 +8,11 @@
 
 ## 一、项目路径与交付基准
 
-1. **最终正式项目路径**：`D:\\Qiuizi\\project\\XiangqiStudio`
+1. **最终正式项目路径**：`<project-root>`
 2. **最新 Windows Release 绿色运行程序路径**：  
-   `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\xiangqistudio.exe` (文件大小: ~4.85 MB)
+   `<project-root>\\src-tauri\\target\\release\\xiangqistudio.exe` (文件大小: ~4.85 MB)
 3. **独立配套运行资源路径**：  
-   `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\resources\\`  
+   `<project-root>\\src-tauri\\target\\release\\resources\\`
    - `pikafish-bmi2.exe` (1.55 MB, 高性能 BMI2 指令集)  
    - `pikafish-avx2.exe` (1.61 MB, AVX2 兼容指令集)  
    - `pikafish.nnue` (53.21 MB, 官方权威神经网络评估权重)  
@@ -30,7 +30,7 @@
 | **前端完整源码** | `src/` (components, views, stores, core, assets) | 纯英文目录，Vue 3 + TS 源码完整，`pnpm build` (`vue-tsc --noEmit && vite build`) 0 error 极速编译完成 | **已通过真实桌面交互测试** |
 | **Tauri/Rust 后端** | `src-tauri/src/` (main.rs, lib.rs, engine.rs) | Rust UCI 通信与状态机源码健全，`cargo check` 与 `cargo test` 顺利通过 | **已通过自动化测试** |
 | **测试套件** | `tests/` (5 个测试套件) | 覆盖走棋规则、中文记谱、真实引擎对战、UCI 选项、遥测防零与任务隔离 | **已通过自动化测试** (21/21 passed) |
-| **Git 版本管理** | `D:\\Qiuizi\\project\\XiangqiStudio\\.git` | master 分支管理，历史记录清晰，工作区干净 (`working tree clean`) | **已通过真实验证** |
+| **Git 版本管理** | `<project-root>\\.git` | master 分支管理，历史记录清晰，工作区干净 (`working tree clean`) | **已通过真实验证** |
 
 ---
 
@@ -51,7 +51,7 @@
 - **实测结果**：
   - 应用程序以独立原生进程启动 (PID 62400, Running: True)；
   - 引擎被成功发现并自动拉起，路径精准指向当前 Release 目录：  
-    `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\resources\\pikafish-bmi2.exe`；
+    `<project-root>\\src-tauri\\target\\release\\resources\\pikafish-bmi2.exe`；
   - 内存工作集正常加载 NNUE 权重 (~40MB~80MB)；
   - 主窗口退出后，触发 `stop_engine_internal`，Pikafish 引擎**无任何残留或僵尸进程** (`Engine Cleanly Terminated: True`)。
 - **验收状态**：**已通过真实桌面交互测试**
@@ -123,7 +123,7 @@
 ## 七、已清理文件与目录清单及磁盘空间占用对比
 
 ### 1. 清理清单
-- **已清理**：`D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\debug/`（Rust 调试编译缓存与测试依赖，约 3.35 GB）。
+- **已清理**：`<project-root>\\src-tauri\\target\\debug/`（Rust 调试编译缓存与测试依赖，约 3.35 GB）。
 - **保留项**：`src-tauri/target/release/`（包含最终 Windows Release 运行程序与脱机资源）。
 - **保留项**：`node_modules/`、`pnpm-lock.yaml`（工程依赖基石）。
 
@@ -141,11 +141,11 @@
 ## 八、当前保留的必要文件清单
 
 1. **核心可执行文件与资源**：
-   - `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\xiangqistudio.exe`
-   - `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\resources\\pikafish-bmi2.exe`
-   - `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\resources\\pikafish-avx2.exe`
-   - `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\resources\\pikafish.nnue`
-   - `D:\\Qiuizi\\project\\XiangqiStudio\\src-tauri\\target\\release\\resources\\licenses\\`
+   - `<project-root>\\src-tauri\\target\\release\\xiangqistudio.exe`
+   - `<project-root>\\src-tauri\\target\\release\\resources\\pikafish-bmi2.exe`
+   - `<project-root>\\src-tauri\\target\\release\\resources\\pikafish-avx2.exe`
+   - `<project-root>\\src-tauri\\target\\release\\resources\\pikafish.nnue`
+   - `<project-root>\\src-tauri\\target\\release\\resources\\licenses\\`
 2. **权威源码资源**：
    - `src-tauri/resources/`（纳入 Git 管理的原始资源）
 3. **完整工程源码**：
@@ -159,12 +159,12 @@
 > **遵照用户安全原则：本次未自动删除旧项目中的任何文件，亦未修改原来的鲨鱼象棋软件。**
 
 ### 1. 旧目录当前实际状态核查
-- **核查结果**：经系统路径检验，原 `D:\\Qiuizi\\project\\皮卡鱼引擎+鲨鱼界面\\XiangqiStudio` 目录**当前已经不存在**（在前期迁移任务中已安全归档/释放，成功释放了原有约 7.72 GB 空间）。
-- **保留的原版软件**：当前 `D:\\Qiuizi\\project\\皮卡鱼引擎+鲨鱼界面` 仅保留原版 `鲨鱼象棋.exe` 及其配套必要资源（实际占用 **93.49 MB**）。
-- **独立性结论**：新项目 `D:\\Qiuizi\\project\\XiangqiStudio` 对旧目录无任何文件引用或依赖，已完全具备 100% 独立演进和独立构建运行能力。
+- **核查结果**：经系统路径检验，原 `旧版引擎目录\\XiangqiStudio` 目录**当前已经不存在**（在前期迁移任务中已安全归档/释放，成功释放了原有约 7.72 GB 空间）。
+- **保留的原版软件**：当前 `旧版引擎目录` 仅保留原版 `鲨鱼象棋.exe` 及其配套必要资源（实际占用 **93.49 MB**）。
+- **独立性结论**：新项目 `<project-root>` 对旧目录无任何文件引用或依赖，已完全具备 100% 独立演进和独立构建运行能力。
 
 ### 2. 待用户确认事项
-- 当前新项目 `D:\\Qiuizi\\project\\XiangqiStudio` 已经完全独立且功能齐备。旧目录中仅保留的原版 `鲨鱼象棋.exe`（93.49 MB）建议继续保留作为原版参考，无需进一步删除。
+- 当前新项目 `<project-root>` 已经完全独立且功能齐备。旧目录中仅保留的原版 `鲨鱼象棋.exe`（93.49 MB）建议继续保留作为原版参考，无需进一步删除。
 
 ---
 

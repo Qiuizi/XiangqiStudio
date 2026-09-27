@@ -18,10 +18,10 @@
 ## 二、测试中发现的问题与修复记录
 
 ### 1. Pikafish 在 Windows 下读取中文路径 NNUE 失败
-- **问题现象**：Stockfish/Pikafish C++ 核心在 Windows 上使用标准 ANSI `fopen` 读取权重文件，当传入绝对路径 `D:\Qiuizi\project\皮卡鱼引擎+鲨鱼界面\...` 时，因路径中包含非 ASCII 中文字符导致引擎报错 `The network file was not loaded successfully` 并强制退出。
+- **问题现象**：Stockfish/Pikafish C++ 核心在 Windows 上使用标准 ANSI `fopen` 读取权重文件，当传入绝对路径 `旧版引擎目录\...` 时，因路径中包含非 ASCII 中文字符导致引擎报错 `The network file was not loaded successfully` 并强制退出。
 - **根本原因**：C++ 运行时未启用 UTF-8 编码页时，绝对路径中的中文导致文件句柄打开失败。
 - **修复方案**：在 Rust 启动 Pikafish 时，已将子进程的 CWD (`current_dir`) 严格设置为引擎所在目录，通过发送相对路径 `setoption name EvalFile value pikafish.nnue` 进行加载，彻底规避了 Windows 中文路径编码缺陷。
-- **修复文件**：[`XiangqiStudio/src-tauri/src/engine.rs`](file:///D:/Qiuizi/project/XiangqiStudio/src-tauri/src/engine.rs)
+- **修复文件**：[`XiangqiStudio/src-tauri/src/engine.rs`](../src-tauri/src/engine.rs)
 
 ### 2. UCI 异步事件与取消搜索的时序竞争 (Race Condition)
 - **问题现象**：在引擎正在计算时，若用户点击“悔棋”或“重新开始”，Pikafish 收到 `stop` 指令后仍会吐出上一次旧局面的 `bestmove`。如果前端没有比对搜索任务标识，可能会错误地将旧局面的推荐步执行在悔棋后的新局面中，引发“连续走棋”或“幽灵落子”。
@@ -29,17 +29,17 @@
   1. 在 Rust 端引入单调递增的原子计数器 `SEARCH_COUNTER`，每次发起新搜索或中止搜索时分配新的 `search_id`。
   2. 广播 `engine-bestmove` 时携带 `{ search_id, is_ai_move, bestmove }`。
   3. 前端 Pinia 状态机维护 `activeAiSearchId`，仅当返回的 `search_id` 与当前活跃思考任务完全匹配时才触发棋盘落子，所有因 `stop` 退出的迟滞 `bestmove` 均被安全过滤。
-- **修复文件**：[`XiangqiStudio/src-tauri/src/engine.rs`](file:///D:/Qiuizi/project/XiangqiStudio/src-tauri/src/engine.rs)、[`XiangqiStudio/src/stores/gameStore.ts`](file:///D:/Qiuizi/project/XiangqiStudio/src/stores/gameStore.ts)
+- **修复文件**：[`XiangqiStudio/src-tauri/src/engine.rs`](../src-tauri/src/engine.rs)、[`XiangqiStudio/src/stores/gameStore.ts`](../src/stores/gameStore.ts)
 
 ### 3. 多级相对路径寻址缺陷
 - **问题现象**：当直接双击运行 `XiangqiStudio/src-tauri/target/debug/xiangqistudio.exe` 时，原有的单层 `../皮卡鱼-Pikafish` 无法穿透至工作区根目录，导致引擎可执行文件查找失败。
 - **修复方案**：在 Rust 实现了向上逐级遍历 6 层父目录与当前工作目录的鲁棒查找器 `find_pikafish_executable`，同时支持按优先级自动查找 `pikafish-bmi2.exe`、`pikafish-avx2.exe`、`pikafish-sse41-popcnt.exe`。
-- **修复文件**：[`XiangqiStudio/src-tauri/src/engine.rs`](file:///D:/Qiuizi/project/XiangqiStudio/src-tauri/src/engine.rs)
+- **修复文件**：[`XiangqiStudio/src-tauri/src/engine.rs`](../src-tauri/src/engine.rs)
 
 ### 4. 纯网页端预览时的 Tauri 内核兼容处理
 - **问题现象**：在普通外部浏览器调试前端界面时，因缺乏 `window.__TAURI_INTERNALS__` 会抛出未捕获异常。
 - **修复方案**：封装 `isTauri()` 环境守卫，在桌面原生环境下驱动 Rust 引擎，在普通浏览器中平滑降级为离线单机双人对弈模式。
-- **修复文件**：[`XiangqiStudio/src/stores/gameStore.ts`](file:///D:/Qiuizi/project/XiangqiStudio/src/stores/gameStore.ts)
+- **修复文件**：[`XiangqiStudio/src/stores/gameStore.ts`](../src/stores/gameStore.ts)
 
 ### 5. 双击启动报错 "localhost refused to connect (ERR_CONNECTION_REFUSED)" 修复
 - **根本原因**：
@@ -51,7 +51,7 @@
   2. 将必要的皮卡鱼引擎与权重文件同步部署至 `resources/` 目录。
   3. 执行 `pnpm tauri build --no-bundle`（正式 Release 独立版）与 `pnpm tauri build --debug --no-bundle`（调试独立版）。
   4. 验证在彻底关闭 Vite 开发服务器的状态下，双击 exe 均可原生秒级加载游戏大厅与棋盘界面，并成功拉起 Pikafish。
-- **修复文件**：[`XiangqiStudio/src-tauri/tauri.conf.json`](file:///D:/Qiuizi/project/XiangqiStudio/src-tauri/tauri.conf.json)、[`XiangqiStudio/src-tauri/src/engine.rs`](file:///D:/Qiuizi/project/XiangqiStudio/src-tauri/src/engine.rs)
+- **修复文件**：[`XiangqiStudio/src-tauri/tauri.conf.json`](../src-tauri/tauri.conf.json)、[`XiangqiStudio/src-tauri/src/engine.rs`](../src-tauri/src/engine.rs)
 
 ---
 
@@ -69,20 +69,20 @@
 
 ### 1. 正式 Release 独立可执行程序（推荐日常使用，性能最高、体积最小）
 ```text
-D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\xiangqistudio.exe
+<project-root>\src-tauri\target\release\xiangqistudio.exe
 ```
 * **特点**：全前端资源内嵌，开启 LTO 与二进制代码裁剪优化，无需开发服务器，双击即玩。
 * **随附资源**：同级目录及 `resources/` 下已部署好 `pikafish-bmi2.exe`、`pikafish-avx2.exe`、`pikafish.nnue`，支持完全绿色便携运行。
 
 ### 2. 开发热重载模式（仅在二次开发代码时使用）
 ```powershell
-cd D:\Qiuizi\project\XiangqiStudio
+cd <project-root>
 pnpm tauri dev
 ```
 
 ### 3. 自动化测试执行
 ```powershell
-cd D:\Qiuizi\project\XiangqiStudio
+cd <project-root>
 pnpm test
 ```
 包含中文记谱法测试（5 项）、象棋法定规则测试（7 项）、Pikafish UCI 选项与搜索限制测试（3 项）、真实 Pikafish 20 半回合实战对战（2 项），全套测试全部通过。

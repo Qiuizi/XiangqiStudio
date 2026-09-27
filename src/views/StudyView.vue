@@ -21,8 +21,10 @@
         <!-- Header & Submode Tabs -->
         <div class="panel-header">
           <div class="header-title-row">
-            <FlaskConical :size="18" class="header-icon" />
-            <h3>残局推演与研究</h3>
+            <div class="title-with-icon">
+              <FlaskConical :size="18" class="header-icon" />
+              <h3>残局推演与研究</h3>
+            </div>
           </div>
           <p class="panel-desc">支持双方手动推演、人机残局对抗及自由摆棋构建。</p>
 
@@ -349,6 +351,7 @@
 
       </div>
     </div>
+
   </div>
 </template>
 
@@ -357,7 +360,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { 
   FlaskConical, BookOpen, Swords, Edit3, Cpu, Pause, Play, 
   RotateCcw, Undo2, ArrowUpDown, Copy, Upload, Trash2, 
-  CheckCircle, AlertTriangle 
+  CheckCircle, AlertTriangle
 } from 'lucide-vue-next';
 import { useGameStore, type StudySubMode } from '../stores/gameStore';
 import ChessBoard from '../components/chess/ChessBoard.vue';
@@ -1173,4 +1176,11 @@ onUnmounted(() => {
 .load-fen-btn:hover {
   background: rgba(212, 175, 55, 0.2);
 }
+
+.title-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 </style>

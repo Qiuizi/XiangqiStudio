@@ -161,7 +161,7 @@ Test Files  6 passed (6)
 ## 10. 最新正式可执行程序路径
 
 * **Windows 64位正式 Release 可执行程序**：
-  `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\xiangqistudio.exe`
+  `<project-root>\src-tauri\target\release\xiangqistudio.exe`
 * **资源文件目录**：
-  `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\resources\`
+  `<project-root>\src-tauri\target\release\resources\`
   （包含 `pikafish-bmi2.exe`, `pikafish-avx2.exe`, `pikafish.nnue`）

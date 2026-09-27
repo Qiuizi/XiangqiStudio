@@ -73,7 +73,7 @@
 ## 五、修改前后的性能对比
 
 * **单元与集成测试**：由 36 项扩充至 **40 项全部 100% 通过**，新增专门针对 MultiPV 均匀派发、推荐箭头稳定性和棋盘隔离性的自动化回归测试套件。
-* **Tauri Release 构建**：成功输出 `D:\Qiuizi\project\XiangqiStudio\src-tauri\target\release\xiangqistudio.exe`。
+* **Tauri Release 构建**：成功输出 `<project-root>\src-tauri\target\release\xiangqistudio.exe`。
 * **IPC 稳定性**：每个 MultiPV 线路按 80ms 独立配额公平派发，Tauri 事件频率稳定在 7~10 次/秒，WebView2 渲染管线极其流畅。
 
 ---

@@ -243,6 +243,7 @@
         </div>
       </div>
     </div>
+
   </div>
 </template>
 
@@ -260,7 +261,7 @@ import {
   CornerUpLeft, 
   BookOpen, 
   FilePlus2, 
-  RefreshCw 
+  RefreshCw
 } from 'lucide-vue-next';
 import { useGameStore } from '../stores/gameStore';
 import { useReplayStore } from '../stores/replayStore';
@@ -827,4 +828,5 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 </style>
