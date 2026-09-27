@@ -17,14 +17,30 @@ Xiangqi Studio 是一个基于 Pikafish 引擎的本地中国象棋分析工作�
 - FEN import and export
 - Local Pikafish engine and configurable engine options
 
-## Screenshots
+## Screenshot
 
-There are no product screenshots in the repository yet. Genuine screenshots can be added to [`docs/images/`](docs/images/).
+Real application screenshots will be displayed here when available. Place only genuine screenshots in [`docs/images/`](docs/images/).
 
-- Home screen — reserved
-- Human vs. AI board — reserved
-- Engine analysis — reserved
-- Replay and variations — reserved
+<!-- Uncomment each image after adding the corresponding real screenshot:
+![Home screen](docs/images/home.png)
+![Engine analysis](docs/images/analysis.png)
+![Endgame study](docs/images/study.png)
+![Xiangqi Studio demo](docs/images/demo.gif)
+-->
+
+## Installation
+
+### Windows x64
+
+1. Download the [Xiangqi Studio v1.0.0 Windows x64 installer](https://github.com/Qiuizi/XiangqiStudio/releases/download/v1.0.0/xiangqistudio_1.0.0_x64-setup.exe) from GitHub Releases.
+2. Run the installer and follow the setup steps.
+3. Launch Xiangqi Studio.
+
+## First Run
+
+1. Choose **人机对战** (Human vs. AI) on the home screen to start a game against Pikafish.
+2. Choose **残局研究** (Endgame Study) to set up a position or load one with FEN.
+3. In **对战模式**, open **AI 分析** and select **开始分析** to analyze the current board position.
 
 ## Architecture
 
@@ -32,10 +48,6 @@ There are no product screenshots in the repository yet. Genuine screenshots can 
 - **Desktop:** Tauri 2
 - **Backend:** Rust
 - **Engine:** Pikafish, running locally
-
-## Installation
-
-**Windows:** Download the [v1.0.0 installer](https://github.com/Qiuizi/XiangqiStudio/releases/download/v1.0.0/xiangqistudio_1.0.0_x64-setup.exe), or browse [all GitHub Releases](https://github.com/Qiuizi/XiangqiStudio/releases).
 
 ## Development
 
