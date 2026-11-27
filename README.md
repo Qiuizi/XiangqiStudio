@@ -6,6 +6,8 @@ Xiangqi Studio 是一个基于 Pikafish 引擎的本地中国象棋分析工作�
 
 **Current version: v1.0.0 — First stable release**
 
+[Product website](https://qiuizi.github.io/XiangqiStudio/) · [Download the latest release](https://github.com/Qiuizi/XiangqiStudio/releases/latest)
+
 ## Features
 
 - Human vs. AI play
@@ -16,17 +18,6 @@ Xiangqi Studio 是一个基于 Pikafish 引擎的本地中国象棋分析工作�
 - Variation tree for exploring alternate lines
 - FEN import and export
 - Local Pikafish engine and configurable engine options
-
-## Screenshot
-
-Real application screenshots will be displayed here when available. Place only genuine screenshots in [`docs/images/`](docs/images/).
-
-<!-- Uncomment each image after adding the corresponding real screenshot:
-![Home screen](docs/images/home.png)
-![Engine analysis](docs/images/analysis.png)
-![Endgame study](docs/images/study.png)
-![Xiangqi Studio demo](docs/images/demo.gif)
--->
 
 ## Installation
 

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Xiangqi Studio · 象棋研究室</title>
+  <meta name="description" content="Xiangqi Studio（象棋研究室）是运行在本机的中国象棋分析桌面程序。人机对战、同屏对弈、复盘打谱与残局研究，由随包的 Pikafish 引擎解算。Windows x64，v1.0.0。">
+  <meta name="author" content="Qiuizi">
+  <meta name="theme-color" content="#100c09">
+  <link rel="canonical" href="https://qiuizi.github.io/XiangqiStudio/">
+  <meta property="og:title" content="Xiangqi Studio · 象棋研究室">
+  <meta property="og:description" content="本地中国象棋分析桌面程序。对局、复盘和残局都留在自己的电脑上，由 Pikafish 在本机解算。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://qiuizi.github.io/XiangqiStudio/">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <a class="skip" href="#preview">跳到预演棋盘</a>
+  <header class="top">
+    <div class="wrap top-bar">
+      <a class="brand" href="#preview">
+        <span class="seal" aria-hidden="true">象</span>
+        <span class="brand-name">
+          <strong>象棋研究室</strong>
+          <span>Xiangqi Studio</span>
+        </span>
+      </a>
+      <nav class="nav" aria-label="页内">
+        <a href="#preview">预演</a>
+        <a href="#modes">四种用法</a>
+        <a href="#analysis">分析台</a>
+        <a href="#download">下载</a>
+      </nav>
+      <a class="btn btn-lacquer" href="https://github.com/Qiuizi/XiangqiStudio/releases/latest">
+        <span class="long">下载 v1.0.0</span>
+        <span class="short">下载</span>
+      </a>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap">
+      <section class="hero" id="preview">
+        <div class="hero-copy">
+          <p class="kicker">本地 · 中国象棋</p>
+          <h1>象棋研究室</h1>
+          <p class="latin-title">Xiangqi Studio</p>
+          <p class="lede">一间放在自己电脑上的中国象棋工作室。对局、复盘和残局都在本地进行，Pikafish 随程序一起启动，局面不必交到别人的服务器。</p>
+          <div class="hero-actions">
+            <a class="btn btn-lacquer" href="https://github.com/Qiuizi/XiangqiStudio/releases/latest">下载 v1.0.0</a>
+            <a class="btn btn-ghost" href="https://github.com/Qiuizi/XiangqiStudio">查看源码</a>
+          </div>
+          <ul class="fact-row">
+            <li>v1.0.0 稳定版</li>
+            <li>Windows 10 / 11 x64</li>
+            <li>GPL-3.0</li>
+            <li>本机引擎</li>
+          </ul>
+        </div>
+
+        <div class="desk">
+          <div class="desk-top">
+            <div class="desk-brand">
+              <span class="mini-seal" aria-hidden="true">象</span>
+              <div>
+                <strong>分析台预演</strong>
+                <span>浅层搜索 · 不是 Pikafish</span>
+              </div>
+            </div>
+            <div class="desk-status">
+              <span id="turn-label">红方走棋</span>
+              <span id="search-state" class="pill">预演</span>
+            </div>
+          </div>
+          <div class="desk-body">
+            <div class="play">
+              <div class="eval" aria-hidden="true">
+                <div class="eval-track">
+                  <div class="eval-black" id="eval-black"></div>
+                  <div class="eval-red" id="eval-red"></div>
+                </div>
+                <div class="eval-score" id="eval-score">0.0</div>
+              </div>
+              <div class="board-stage" id="stage"></div>
+            </div>
+            <aside class="panel" aria-label="预演分析">
+              <p class="panel-label" id="last-label">尚未落子</p>
+              <dl class="stats">
+                <div><dt>预演深度</dt><dd id="stat-depth">–</dd></div>
+                <div><dt>红方视角</dt><dd class="stat-value" id="stat-score">–</dd></div>
+                <div><dt>预演节点</dt><dd id="stat-nodes">–</dd></div>
+                <div><dt>耗时</dt><dd id="stat-time">–</dd></div>
+              </dl>
+              <p class="pv-head">候选着法</p>
+              <ol class="pv-list" id="pv-list"></ol>
+              <div class="panel-actions">
+                <button type="button" id="btn-analyze">停止分析</button>
+                <button type="button" id="btn-undo">悔棋</button>
+                <button type="button" id="btn-flip">翻转</button>
+                <button type="button" id="btn-reset">重摆</button>
+              </div>
+            </aside>
+          </div>
+          <div class="preset-bar" id="preset-bar" role="group" aria-label="程序内置的示例局面"></div>
+          <p class="desk-caption">棋盘可以走子。评估条、金色箭头和主变来自页面里的浅层搜索，只为看清分析台长什么样。安装后的程序用本机 Pikafish 和随包的神经网络权重做深度解算，并能列出 MultiPV、节点速率和哈希占用。</p>
+        </div>
+      </section>
+
+      <section class="section" id="modes">
+        <p class="kicker">壹</p>
+        <h2>同一张桌子上的四种用法</h2>
+        <p class="section-lead">打开程序先见到这四扇门。引擎在进入时于后台就绪，计算不出这台电脑。</p>
+        <ol class="rooms">
+          <li class="room">
+            <span class="idx">壹</span>
+            <div>
+              <h3>人机对战</h3>
+              <p>与本机 Pikafish 对弈。开局前可以选择执红或执黑。对手的思考可以限制在单步时间、搜索深度或计算节点。</p>
+              <p>走法指引把推荐着法画在棋盘上。可以悔棋、翻转视角。拾子、落子、吃子、将军、终局、悔棋和开局各有音效，顶栏可以静音。</p>
+            </div>
+          </li>
+          <li class="room">
+            <span class="idx">贰</span>
+            <div>
+              <h3>同屏对弈</h3>
+              <p>两个人在同一台电脑上轮流走子，不需要网络。棋盘、音效、悔棋和翻转都还在。</p>
+            </div>
+          </li>
+          <li class="room">
+            <span class="idx">叁</span>
+            <div>
+              <h3>复盘打谱</h3>
+              <p>棋谱回放只浏览，不改谱。手动打谱时，若在历史局面走出新着，原主线留在变化树上，同级变着可以切换，也能一键回到主线。</p>
+              <p>对战里下过的棋可以同步进来。导航有起点、上一步、下一步和终点。复盘使用自己的棋盘，不改动正在进行的对局。</p>
+            </div>
+          </li>
+          <li class="room">
+            <span class="idx">肆</span>
+            <div>
+              <h3>残局研究</h3>
+              <p>三种方式：双方手动推演、与引擎对抗、自由摆棋。摆棋时可放入帅、仕、相、马、车、炮、兵，以及将、士、象、马、车、炮、卒，也可以擦掉棋子。</p>
+              <p>内置六个局面：初始全盘、马兵胜单缺象、炮兵胜双士、车兵胜单车、三兵胜士象全、单马胜单士。当前局面的 FEN 可以复制，也可以把一串 FEN 贴进来载入。</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section" id="analysis">
+        <p class="kicker">贰</p>
+        <h2>分析台把一步棋摊开</h2>
+        <p class="section-lead measure">对局时，右侧有三个页：对局棋谱、AI 分析、FEN 工具。棋谱按红黑分行，用中文记谱，点任意一步可以跳回去。</p>
+        <div class="split">
+          <div>
+            <h3>搜索与候选</h3>
+            <p>分析可以一直算下去，也可以按深度、时间或节点停下。这些限制和对战里引擎的思考限制是分开的。</p>
+            <p>MultiPV 同时给出多条候选。快捷档是 1、2、3、5 线，设置里可以选择 1 到 5 条。点一条路线，棋盘上的箭头跟着换。</p>
+            <p>面板显示搜索深度、红方视角的评分、每秒节点、节点数、耗时和哈希占用。子力分写成正负小数，杀棋写成 M+n 或 M-n。左侧评估条用同一套分数：红方向下增长，黑方向上增长。</p>
+          </div>
+          <div>
+            <h3>引擎怎么调</h3>
+            <p>线程数按本机逻辑核心给出默认值，并给界面留出余量。哈希表默认 128 MB，可以调大，也可以清空。</p>
+            <p>Skill Level 从 0 到 20，数值越低越容易走软，20 是满强度。打开限制棋力后，Elo 滑杆从 1280 到 3133。</p>
+            <p>重复局面可以按亚洲象棋联合会规例、中国规则、天天象棋、计算机对弈、弈天棋缘、允许捉子，或不判定重现来处理。引擎报告的其余 UCI 选项在高级参数里改。设置记在本机，引擎进程可以重新启动。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="download">
+        <p class="kicker">叁</p>
+        <h2>拿到 v1.0.0</h2>
+        <p class="section-lead measure">当前发布是 2026 年 9 月 27 日的第一个稳定版，只有 Windows x64 安装包。源码在仓库里，以 GPL-3.0 授权。</p>
+        <div class="plate">
+          <h3>Windows 安装包</h3>
+          <p>运行安装程序，按步骤完成，然后从开始菜单或桌面打开 Xiangqi Studio。窗口默认 1280×860，最小 1024×720。</p>
+          <dl class="meta">
+            <div>
+              <dt>版本</dt>
+              <dd>v1.0.0</dd>
+            </div>
+            <div>
+              <dt>发布日期</dt>
+              <dd>2026-09-27</dd>
+            </div>
+            <div>
+              <dt>文件</dt>
+              <dd><code>xiangqistudio_1.0.0_x64-setup.exe</code></dd>
+            </div>
+            <div>
+              <dt>系统</dt>
+              <dd>Windows 10 / 11，64 位</dd>
+            </div>
+            <div>
+              <dt>SHA256</dt>
+              <dd class="hash">0cadfe6333ba4d5f36cb2336d607eef5d99038a412f38442543a4d99501326e7</dd>
+            </div>
+            <div>
+              <dt>随包引擎</dt>
+              <dd>pikafish-bmi2.exe、pikafish-avx2.exe、pikafish.nnue</dd>
+            </div>
+          </dl>
+          <div class="hero-actions">
+            <a class="btn btn-lacquer" href="https://github.com/Qiuizi/XiangqiStudio/releases/latest">打开最新 Release</a>
+            <a class="btn btn-ghost" href="https://github.com/Qiuizi/XiangqiStudio/releases/download/v1.0.0/xiangqistudio_1.0.0_x64-setup.exe">直接下载安装包</a>
+          </div>
+          <ol class="steps">
+            <li>在首页选择「人机对战」，与 Pikafish 下一局。</li>
+            <li>选择「残局研究」，自己摆子，或用 FEN 载入局面。</li>
+            <li>在对战里打开「AI 分析」，按「开始分析」。</li>
+          </ol>
+        </div>
+        <div class="split">
+          <div>
+            <h3>它在什么机器上跑</h3>
+            <p>安装包面向 Windows 10 或 Windows 11 的 64 位系统，并附带 BMI2 与 AVX2 两套引擎。程序按文件名依次寻找，先用 BMI2。</p>
+            <p>界面由 Tauri 2 承载，在 Windows 上通过系统 WebView2 显示。神经网络权重是随包的 pikafish.nnue。</p>
+          </div>
+          <div>
+            <h3>程序由什么写成</h3>
+            <p>界面是 Vue 3 与 TypeScript，状态放在 Pinia，桌面壳是 Tauri 2，引擎进程由 Rust 通过 UCI 管理。</p>
+            <p>Xiangqi Studio 以 <a href="https://github.com/Qiuizi/XiangqiStudio/blob/main/LICENSE">GPL-3.0</a> 发布。Pikafish 及其权重属于上游项目，许可文本在安装包的 licenses 目录，也见 <a href="https://github.com/official-pikafish/Pikafish">Pikafish</a>。本工作室不声称拥有引擎或权重。</p>
+            <p>从源码构建时，仓库要求 Node.js 24、pnpm 11，以及 Tauri 2 所需的 Rust 工具链。</p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="colophon">
+        <p>Xiangqi Studio · 象棋研究室</p>
+        <p><a href="https://github.com/Qiuizi/XiangqiStudio">Qiuizi</a> · GPL-3.0</p>
+      </footer>
+    </div>
+  </main>
+  <script src="assets/site.js" defer></script>
+</body>
+</html>
