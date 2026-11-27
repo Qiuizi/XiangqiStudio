@@ -14,6 +14,10 @@ export class XiangqiBoard {
   public history: Move[];
   public halfMove: number;
   public fullMove: number;
+  /** FEN after each ply. Index 0 is the start position; index n is the position after n moves. */
+  public positionFens: string[];
+  /** Ply currently shown. Equals history.length when the live game tip is on the board. */
+  public viewPly: number;
 
   constructor(fen: string = INITIAL_FEN) {
     const parsed = fenToBoard(fen);
@@ -22,6 +26,8 @@ export class XiangqiBoard {
     this.halfMove = parsed.halfMove;
     this.fullMove = parsed.fullMove;
     this.history = [];
+    this.viewPly = 0;
+    this.positionFens = [this.getFen()];
   }
 
   public reset(fen: string = INITIAL_FEN) {
@@ -31,6 +37,32 @@ export class XiangqiBoard {
     this.halfMove = parsed.halfMove;
     this.fullMove = parsed.fullMove;
     this.history = [];
+    this.viewPly = 0;
+    this.positionFens = [this.getFen()];
+  }
+
+  /**
+   * Show the position after `step` recorded moves without deleting the game record.
+   */
+  public showPly(step: number): boolean {
+    if (!Number.isInteger(step) || step < 0 || step > this.history.length) return false;
+    if (step === this.viewPly) return true;
+    const fen = this.positionFens[step];
+    if (!fen) return false;
+    const parsed = fenToBoard(fen);
+    this.grid = parsed.grid;
+    this.activeColor = parsed.activeColor;
+    this.halfMove = parsed.halfMove;
+    this.fullMove = parsed.fullMove;
+    this.viewPly = step;
+    return true;
+  }
+
+  /** Keep the recorded line consistent after a manual edit of the viewed position. */
+  public notePositionEdited() {
+    this.history = this.history.slice(0, this.viewPly);
+    this.positionFens = this.positionFens.slice(0, this.viewPly + 1);
+    this.positionFens[this.viewPly] = this.getFen();
   }
 
   public getFen(): string {
@@ -70,6 +102,11 @@ export class XiangqiBoard {
     const isLegal = legalMoves.some(m => m.file === to.file && m.rank === to.rank);
     if (!isLegal) return null;
 
+    if (this.viewPly < this.history.length) {
+      this.history = this.history.slice(0, this.viewPly);
+      this.positionFens = this.positionFens.slice(0, this.viewPly + 1);
+    }
+
     const captured = this.grid[to.rank][to.file] || undefined;
     const move: Move = {
       from,
@@ -87,8 +124,9 @@ export class XiangqiBoard {
     this.grid[to.rank][to.file] = piece;
     this.grid[from.rank][from.file] = null;
 
-    // Update halfMove
-    if (captured || piece.type === 'p') {
+    // 六十回合自然限着只统计未吃子的着数。兵卒前进不重置计数
+    // （与国际象棋“吃子或动兵”的半回合钟不同）。
+    if (captured) {
       this.halfMove = 0;
     } else {
       this.halfMove++;
@@ -103,11 +141,16 @@ export class XiangqiBoard {
     }
 
     this.history.push(move);
+    this.positionFens.push(this.getFen());
+    this.viewPly = this.history.length;
     return move;
   }
 
   public undoMove(): Move | null {
     if (this.history.length === 0) return null;
+    if (this.viewPly !== this.history.length) {
+      this.showPly(this.history.length);
+    }
 
     const lastMove = this.history.pop()!;
     const { from, to, piece, captured, prevHalfMove } = lastMove;
@@ -130,6 +173,8 @@ export class XiangqiBoard {
       this.activeColor = 'red';
     }
 
+    this.positionFens.pop();
+    this.viewPly = this.history.length;
     return lastMove;
   }
 }

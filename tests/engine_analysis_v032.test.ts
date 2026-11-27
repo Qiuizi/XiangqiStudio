@@ -1,32 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { applyEngineInfo, type EngineInfoState } from '../src/core/engine/analysis';
 
 describe('Xiangqi Studio V0.3.2 — Professional Engine Data Sync & State Isolation Verification', () => {
-  interface EngineInfoState {
-    depth: number;
-    seldepth?: number;
-    scoreCp: number | null;
-    scoreMate: number | null;
-    nodes: number;
-    nps: number;
-    timeMs: number;
-    hashfull: number;
-    pv: string[];
-    bestMove: string;
-    multipvLines: Array<{
-      multipv: number;
-      depth: number;
-      seldepth?: number;
-      scoreCp: number | null;
-      scoreMate: number | null;
-      nodes: number;
-      nps: number;
-      timeMs?: number;
-      hashfull?: number;
-      pv: string[];
-      bestMove: string;
-    }>;
-  }
-
   function createEngineInfoReducer() {
     let currentSearchId = 0;
     const state: EngineInfoState = {
@@ -55,61 +30,18 @@ describe('Xiangqi Studio V0.3.2 — Professional Engine Data Sync & State Isolat
 
     function handleEngineInfo(payload: {
       search_id: number;
-      depth?: number;
-      seldepth?: number;
-      score_cp?: number;
-      score_mate?: number;
-      nodes?: number;
-      nps?: number;
-      time_ms?: number;
-      hashfull?: number;
-      multipv?: number;
-      pv?: string[];
+      depth?: number | null;
+      seldepth?: number | null;
+      score_cp?: number | null;
+      score_mate?: number | null;
+      nodes?: number | null;
+      nps?: number | null;
+      time_ms?: number | null;
+      hashfull?: number | null;
+      multipv?: number | null;
+      pv?: string[] | null;
     }) {
-      if (currentSearchId && payload.search_id !== currentSearchId) {
-        return; // Reject stale search
-      }
-
-      if (payload.depth !== undefined && payload.depth !== null) state.depth = payload.depth;
-      if (payload.seldepth !== undefined && payload.seldepth !== null) state.seldepth = payload.seldepth;
-      if (payload.time_ms !== undefined && payload.time_ms !== null) state.timeMs = payload.time_ms;
-      if (payload.hashfull !== undefined && payload.hashfull !== null) state.hashfull = payload.hashfull;
-      if (payload.nodes !== undefined && payload.nodes !== null) state.nodes = payload.nodes;
-      if (payload.nps !== undefined && payload.nps !== null) state.nps = payload.nps;
-
-      const lineNum = payload.multipv || 1;
-      const existingIdx = state.multipvLines.findIndex(l => l.multipv === lineNum);
-      const prevLine = existingIdx >= 0 ? state.multipvLines[existingIdx] : null;
-
-      const lineObj = {
-        multipv: lineNum,
-        depth: payload.depth || (prevLine?.depth ?? 0),
-        seldepth: payload.seldepth !== undefined && payload.seldepth !== null ? payload.seldepth : prevLine?.seldepth,
-        scoreCp: payload.score_cp !== undefined ? payload.score_cp : (prevLine?.scoreCp ?? null),
-        scoreMate: payload.score_mate !== undefined ? payload.score_mate : (prevLine?.scoreMate ?? null),
-        nodes: payload.nodes !== undefined && payload.nodes !== null ? payload.nodes : (prevLine?.nodes ?? 0),
-        nps: payload.nps !== undefined && payload.nps !== null ? payload.nps : (prevLine?.nps ?? 0),
-        timeMs: payload.time_ms !== undefined && payload.time_ms !== null ? payload.time_ms : prevLine?.timeMs,
-        hashfull: payload.hashfull !== undefined && payload.hashfull !== null ? payload.hashfull : prevLine?.hashfull,
-        pv: (payload.pv && payload.pv.length > 0) ? payload.pv : (prevLine?.pv ?? []),
-        bestMove: (payload.pv && payload.pv.length > 0) ? payload.pv[0] : (prevLine?.bestMove ?? ''),
-      };
-
-      if (existingIdx >= 0) {
-        state.multipvLines[existingIdx] = lineObj;
-      } else {
-        state.multipvLines.push(lineObj);
-        state.multipvLines.sort((a, b) => a.multipv - b.multipv);
-      }
-
-      if (lineNum === 1) {
-        if (payload.score_cp !== undefined) state.scoreCp = payload.score_cp;
-        if (payload.score_mate !== undefined) state.scoreMate = payload.score_mate;
-        if (payload.pv && payload.pv.length > 0) {
-          state.pv = payload.pv;
-          state.bestMove = payload.pv[0];
-        }
-      }
+      applyEngineInfo(state, payload, currentSearchId);
     }
 
     return { state, startSearch, handleEngineInfo, getCurrentSearchId: () => currentSearchId };
@@ -241,6 +173,61 @@ describe('Xiangqi Studio V0.3.2 — Professional Engine Data Sync & State Isolat
     expect(reducer.state.multipvLines[1].bestMove).toBe('b0c2');
     expect(reducer.state.multipvLines[2].multipv).toBe(3);
     expect(reducer.state.multipvLines[2].bestMove).toBe('b2e2');
+  });
+
+  it('5. currmove / 空 score 字段不能清掉已有评估，cp 与 mate 互相替换', () => {
+    const reducer = createEngineInfoReducer();
+    reducer.startSearch(300);
+    reducer.handleEngineInfo({
+      search_id: 300,
+      depth: 11,
+      score_cp: 40,
+      score_mate: null,
+      nodes: 20000,
+      multipv: 1,
+      pv: ['h2e2'],
+    });
+    expect(reducer.state.scoreCp).toBe(40);
+    expect(reducer.state.scoreMate).toBeNull();
+
+    reducer.handleEngineInfo({
+      search_id: 300,
+      depth: 0,
+      score_cp: null,
+      score_mate: null,
+      multipv: 1,
+      pv: [],
+    });
+    expect(reducer.state.depth).toBe(11);
+    expect(reducer.state.scoreCp).toBe(40);
+    expect(reducer.state.scoreMate).toBeNull();
+    expect(reducer.state.nodes).toBe(20000);
+    expect(reducer.state.multipvLines[0].scoreCp).toBe(40);
+    expect(reducer.state.bestMove).toBe('h2e2');
+
+    reducer.handleEngineInfo({
+      search_id: 300,
+      depth: 12,
+      score_cp: null,
+      score_mate: 3,
+      multipv: 1,
+      pv: ['e3e4'],
+    });
+    expect(reducer.state.scoreCp).toBeNull();
+    expect(reducer.state.scoreMate).toBe(3);
+    expect(reducer.state.multipvLines[0].scoreCp).toBeNull();
+    expect(reducer.state.multipvLines[0].scoreMate).toBe(3);
+
+    reducer.handleEngineInfo({
+      search_id: 300,
+      depth: 13,
+      score_cp: 12,
+      score_mate: null,
+      multipv: 1,
+      pv: ['b0c2'],
+    });
+    expect(reducer.state.scoreCp).toBe(12);
+    expect(reducer.state.scoreMate).toBeNull();
   });
 
   it('4. 验证引擎配置持久化 JSON 序列化与反序列化完整性', () => {

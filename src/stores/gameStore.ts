@@ -4,28 +4,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { XiangqiBoard } from '../core/chess/board';
 import { sound } from '../core/sound';
-import { INITIAL_FEN, parseUciMove } from '../core/chess/fen';
+import { fenToBoard, INITIAL_FEN, parseUciMove } from '../core/chess/fen';
 import { validatePositionBeforeEngine } from '../core/chess/validation';
 import type { PieceColor, PieceType, Position } from '../core/chess/types';
 import { useEngineSettingsStore, type UciOptionMeta } from './engineSettingsStore';
+import { applyEngineInfo, type MultiPvLine } from '../core/engine/analysis';
+
+export type { MultiPvLine };
 
 export type GameMode = 'pve' | 'pvp' | 'study' | 'replay';
 export type StudySubMode = 'manual' | 'battle' | 'edit';
 export type MatchStatus = 'user_turn' | 'ai_thinking' | 'engine_error' | 'game_over';
-
-export interface MultiPvLine {
-  multipv: number;
-  depth: number;
-  seldepth?: number;
-  scoreCp: number | null;
-  scoreMate: number | null;
-  nodes: number;
-  nps: number;
-  timeMs?: number;
-  hashfull?: number;
-  pv: string[];
-  bestMove: string;
-}
 
 export interface EngineInfo {
   depth: number;
@@ -115,8 +104,10 @@ export const useGameStore = defineStore('game', () => {
   });
   const history = computed(() => board.value.history);
   const lastMove = computed(() => {
-    if (board.value.history.length === 0) return null;
-    return board.value.history[board.value.history.length - 1];
+    boardVersion.value;
+    const ply = board.value.viewPly;
+    if (ply <= 0) return null;
+    return board.value.history[ply - 1] ?? null;
   });
 
   const currentFen = computed(() => {
@@ -332,62 +323,7 @@ export const useGameStore = defineStore('game', () => {
           }
         }
 
-        if (payload.depth !== undefined && payload.depth !== null) {
-          engineInfo.value.depth = payload.depth;
-        }
-        if (payload.seldepth !== undefined && payload.seldepth !== null) {
-          engineInfo.value.seldepth = payload.seldepth;
-        }
-        if (payload.time_ms !== undefined && payload.time_ms !== null) {
-          engineInfo.value.timeMs = payload.time_ms;
-        }
-        if (payload.hashfull !== undefined && payload.hashfull !== null) {
-          engineInfo.value.hashfull = payload.hashfull;
-        }
-        if (payload.nodes !== undefined && payload.nodes !== null) {
-          engineInfo.value.nodes = payload.nodes;
-        }
-        if (payload.nps !== undefined && payload.nps !== null) {
-          engineInfo.value.nps = payload.nps;
-        }
-
-        const lineNum = payload.multipv || 1;
-        const existingIdx = engineInfo.value.multipvLines.findIndex(l => l.multipv === lineNum);
-        const prevLine = existingIdx >= 0 ? engineInfo.value.multipvLines[existingIdx] : null;
-
-        const lineObj: MultiPvLine = {
-          multipv: lineNum,
-          depth: payload.depth || (prevLine?.depth ?? 0),
-          seldepth: payload.seldepth !== undefined && payload.seldepth !== null ? payload.seldepth : prevLine?.seldepth,
-          scoreCp: payload.score_cp !== undefined ? payload.score_cp : (prevLine?.scoreCp ?? null),
-          scoreMate: payload.score_mate !== undefined ? payload.score_mate : (prevLine?.scoreMate ?? null),
-          nodes: payload.nodes !== undefined && payload.nodes !== null ? payload.nodes : (prevLine?.nodes ?? 0),
-          nps: payload.nps !== undefined && payload.nps !== null ? payload.nps : (prevLine?.nps ?? 0),
-          timeMs: payload.time_ms !== undefined && payload.time_ms !== null ? payload.time_ms : prevLine?.timeMs,
-          hashfull: payload.hashfull !== undefined && payload.hashfull !== null ? payload.hashfull : prevLine?.hashfull,
-          pv: (payload.pv && payload.pv.length > 0) ? payload.pv : (prevLine?.pv ?? []),
-          bestMove: (payload.pv && payload.pv.length > 0) ? payload.pv[0] : (prevLine?.bestMove ?? ''),
-        };
-
-        if (existingIdx >= 0) {
-          engineInfo.value.multipvLines[existingIdx] = lineObj;
-        } else {
-          engineInfo.value.multipvLines.push(lineObj);
-          engineInfo.value.multipvLines.sort((a, b) => a.multipv - b.multipv);
-        }
-
-        if (lineNum === 1) {
-          if (payload.score_cp !== undefined) {
-            engineInfo.value.scoreCp = payload.score_cp;
-          }
-          if (payload.score_mate !== undefined) {
-            engineInfo.value.scoreMate = payload.score_mate;
-          }
-          if (payload.pv && payload.pv.length > 0) {
-            engineInfo.value.pv = payload.pv;
-            engineInfo.value.bestMove = payload.pv[0];
-          }
-        }
+        applyEngineInfo(engineInfo.value, payload, currentSearchId.value);
 
         // Determine recommended move based on MultiPV selection
         let targetMoveStr: string | null = null;
@@ -798,6 +734,11 @@ export const useGameStore = defineStore('game', () => {
     isEngineError.value = false;
     engineErrorMsg.value = null;
 
+    if (board.value.viewPly !== board.value.history.length) {
+      board.value.showPly(board.value.history.length);
+      boardVersion.value++;
+    }
+
     if (gameMode.value === 'pve' || (gameMode.value === 'study' && studySubMode.value === 'battle')) {
       // In battle mode:
       // If it is AI turn (player just moved, AI has not moved yet): only undo 1 move
@@ -935,6 +876,14 @@ export const useGameStore = defineStore('game', () => {
   }
 
   async function resetToPreset(fen: string = INITIAL_FEN) {
+    try {
+      fenToBoard(fen);
+    } catch (e: any) {
+      isEngineError.value = true;
+      engineErrorMsg.value = `FEN 无法解析: ${e?.message || e}`;
+      engineStatusText.value = 'FEN 格式错误';
+      return;
+    }
     clearAiWatchdog();
     clearAnalysisWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
@@ -960,6 +909,14 @@ export const useGameStore = defineStore('game', () => {
   }
 
   async function importNewPosition(fen: string, color?: PieceColor) {
+    try {
+      fenToBoard(fen);
+    } catch (e: any) {
+      isEngineError.value = true;
+      engineErrorMsg.value = `FEN 无法解析: ${e?.message || e}`;
+      engineStatusText.value = 'FEN 格式错误';
+      return;
+    }
     clearAiWatchdog();
     clearAnalysisWatchdog();
     if (isAiThinking.value || isAnalyzing.value) {
@@ -1006,14 +963,15 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function loadCustomFen(fen: string): { success: boolean; error?: string } {
+    const clean = fen.trim();
+    if (!clean) return { success: false, error: 'FEN 字符串不能为空' };
     try {
-      const clean = fen.trim();
-      if (!clean) return { success: false, error: 'FEN 字符串不能为空' };
-      resetToPreset(clean);
-      return { success: true };
+      fenToBoard(clean);
     } catch (e: any) {
-      return { success: false, error: String(e.message || e) };
+      return { success: false, error: String(e?.message || e) };
     }
+    resetToPreset(clean);
+    return { success: true };
   }
 
   function triggerStudyAiMove() {
@@ -1059,8 +1017,9 @@ export const useGameStore = defineStore('game', () => {
     } else {
       board.value.grid[pos.rank][pos.file] = null;
     }
+    board.value.notePositionEdited();
     boardVersion.value++;
-    currentStep.value = board.value.history.length;
+    currentStep.value = board.value.viewPly;
   }
 
   function clearBoard() {
@@ -1071,6 +1030,8 @@ export const useGameStore = defineStore('game', () => {
       }
     }
     board.value.history = [];
+    board.value.viewPly = 0;
+    board.value.positionFens = [board.value.getFen()];
     boardVersion.value++;
     currentStep.value = 0;
   }
@@ -1079,11 +1040,30 @@ export const useGameStore = defineStore('game', () => {
     flipped.value = !flipped.value;
   }
 
-  function jumpToStep(step: number) {
-    if (step < 0 || step > board.value.history.length) return;
-    updateAiArrow(null, true);
+  async function jumpToStep(step: number) {
+    if (!Number.isInteger(step) || step < 0 || step > board.value.history.length) return;
+    if (step === board.value.viewPly && step === currentStep.value) return;
+
+    const resumeAtTip = step === board.value.history.length;
+    const resumeAnalysis = autoAnalysis.value || isStudyAnalyzing.value;
+
+    if (isAiThinking.value || isAnalyzing.value) {
+      await stopAnalysis(true);
+    } else {
+      updateAiArrow(null, true);
+    }
+
+    if (!board.value.showPly(step)) return;
+    boardVersion.value++;
     currentStep.value = step;
-    if (autoAnalysis.value || isAnalyzing.value || isStudyAnalyzing.value) {
+    selectedPos.value = null;
+    legalTargets.value = [];
+    engineInfo.value.multipvLines = [];
+    selectedMultiPv.value = 1;
+
+    if (resumeAtTip) {
+      checkAiTurn();
+    } else if (resumeAnalysis) {
       triggerAnalysis(false);
     }
   }

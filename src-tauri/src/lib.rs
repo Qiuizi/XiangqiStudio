@@ -1,9 +1,10 @@
 mod engine;
 
 use engine::{
-    get_engine_options_internal, restart_engine_internal, search_position_internal,
-    set_engine_options_internal, start_engine_internal, stop_engine_internal,
-    stop_search_internal, EngineState, EngineStatusPayload, SharedEngine, UciOptionMeta,
+    get_engine_options_internal, kill_lingering_engine, restart_engine_internal,
+    search_position_internal, set_engine_options_internal, start_engine_internal,
+    stop_engine_internal, stop_search_internal, EngineState, EngineStatusPayload, SharedEngine,
+    UciOptionMeta,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -50,8 +51,8 @@ async fn stop_search(state: State<'_, SharedEngine>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn stop_engine(state: State<'_, SharedEngine>) -> Result<(), String> {
-    stop_engine_internal(state.inner().clone()).await
+async fn stop_engine(app: AppHandle, state: State<'_, SharedEngine>) -> Result<(), String> {
+    stop_engine_internal(app, state.inner().clone()).await
 }
 
 #[tauri::command]
@@ -64,9 +65,7 @@ async fn get_engine_status(
 }
 
 #[tauri::command]
-async fn get_engine_options(
-    state: State<'_, SharedEngine>,
-) -> Result<Vec<UciOptionMeta>, String> {
+async fn get_engine_options(state: State<'_, SharedEngine>) -> Result<Vec<UciOptionMeta>, String> {
     get_engine_options_internal(state.inner().clone()).await
 }
 
@@ -90,7 +89,6 @@ async fn restart_engine(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let engine_state: SharedEngine = Arc::new(Mutex::new(EngineState::new()));
-    let engine_state_exit = engine_state.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -105,15 +103,17 @@ pub fn run() {
             set_engine_options,
             restart_engine
         ])
-        .on_window_event(move |_window, event| {
+        .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Ensure Pikafish child process is terminated when window closes
-                let state_clone = engine_state_exit.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = stop_engine_internal(state_clone).await;
-                });
+                // The async runtime may already be stopping. Kill by pid here.
+                kill_lingering_engine();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                kill_lingering_engine();
+            }
+        });
 }

@@ -76,11 +76,14 @@ export const useReplayStore = defineStore('replay', () => {
     for (let i = 0; i < moves.length; i++) {
       const m = moves[i];
       const applied = tempBoard.makeMove(m.from, m.to);
+      if (!applied) {
+        break;
+      }
       const nodeId = `node_${i + 1}`;
       const newNode: ReplayNode = {
         id: nodeId,
         parentId: prevNodeId,
-        move: applied ? { ...applied, notation: m.notation || applied.notation } : { ...m },
+        move: { ...applied, notation: m.notation || applied.notation },
         fen: tempBoard.getFen(),
         stepIndex: i + 1,
         childrenIds: [],
