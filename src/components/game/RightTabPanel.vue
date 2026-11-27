@@ -356,6 +356,7 @@ import {
 } from 'lucide-vue-next';
 import { useGameStore, type MultiPvLine } from '../../stores/gameStore';
 import { useEngineSettingsStore } from '../../stores/engineSettingsStore';
+import { scoreFromRedPerspective } from '../../core/engine/score';
 import type { Move } from '../../core/chess/types';
 import EngineSettingsModal from './EngineSettingsModal.vue';
 
@@ -399,29 +400,25 @@ function jumpTo(step: number) {
 // Normalized score from Red's perspective
 const formattedScore = computed(() => {
   const info = gameStore.engineInfo;
-  const isRedTurn = gameStore.activeColor === 'red';
+  const norm = scoreFromRedPerspective(info.scoreCp, info.scoreMate, gameStore.activeColor);
 
-  if (info.scoreMate !== null) {
-    const mateFromRed = isRedTurn ? info.scoreMate : -info.scoreMate;
-    return `M${mateFromRed > 0 ? '+' : ''}${mateFromRed}`;
+  if (norm.scoreMate !== null) {
+    return `M${norm.scoreMate > 0 ? '+' : ''}${norm.scoreMate}`;
   }
-  if (info.scoreCp === null) return '0.00';
-  const cpFromRed = isRedTurn ? info.scoreCp : -info.scoreCp;
-  const pawns = cpFromRed / 100;
+  if (norm.scoreCp === null) return '0.00';
+  const pawns = norm.scoreCp / 100;
   return (pawns > 0 ? '+' : '') + pawns.toFixed(2);
 });
 
 const scoreClass = computed(() => {
   const info = gameStore.engineInfo;
-  const isRedTurn = gameStore.activeColor === 'red';
+  const norm = scoreFromRedPerspective(info.scoreCp, info.scoreMate, gameStore.activeColor);
 
-  if (info.scoreMate !== null) {
-    const mateFromRed = isRedTurn ? info.scoreMate : -info.scoreMate;
-    return mateFromRed > 0 ? 'text-red' : 'text-blue';
+  if (norm.scoreMate !== null) {
+    return norm.scoreMate > 0 ? 'text-red' : 'text-blue';
   }
-  if (info.scoreCp === null) return '';
-  const cpFromRed = isRedTurn ? info.scoreCp : -info.scoreCp;
-  return cpFromRed > 50 ? 'text-red' : cpFromRed < -50 ? 'text-blue' : '';
+  if (norm.scoreCp === null) return '';
+  return norm.scoreCp > 50 ? 'text-red' : norm.scoreCp < -50 ? 'text-blue' : '';
 });
 
 // Unit-aware formatting for nodes and nps
@@ -493,25 +490,21 @@ const candidateLines = computed<MultiPvLine[]>(() => {
 });
 
 function formatLineScore(line: MultiPvLine): string {
-  const isRedTurn = gameStore.activeColor === 'red';
-  if (line.scoreMate !== null && line.scoreMate !== undefined) {
-    const m = isRedTurn ? line.scoreMate : -line.scoreMate;
-    return `M${m > 0 ? '+' : ''}${m}`;
+  const norm = scoreFromRedPerspective(line.scoreCp, line.scoreMate, gameStore.activeColor);
+  if (norm.scoreMate !== null && norm.scoreMate !== undefined) {
+    return `M${norm.scoreMate > 0 ? '+' : ''}${norm.scoreMate}`;
   }
-  if (line.scoreCp === null || line.scoreCp === undefined) return '0.00';
-  const cp = isRedTurn ? line.scoreCp : -line.scoreCp;
-  return (cp > 0 ? '+' : '') + (cp / 100).toFixed(2);
+  if (norm.scoreCp === null || norm.scoreCp === undefined) return '0.00';
+  return (norm.scoreCp > 0 ? '+' : '') + (norm.scoreCp / 100).toFixed(2);
 }
 
 function getLineScoreClass(line: MultiPvLine): string {
-  const isRedTurn = gameStore.activeColor === 'red';
-  if (line.scoreMate !== null && line.scoreMate !== undefined) {
-    const m = isRedTurn ? line.scoreMate : -line.scoreMate;
-    return m > 0 ? 'text-red' : 'text-blue';
+  const norm = scoreFromRedPerspective(line.scoreCp, line.scoreMate, gameStore.activeColor);
+  if (norm.scoreMate !== null && norm.scoreMate !== undefined) {
+    return norm.scoreMate > 0 ? 'text-red' : 'text-blue';
   }
-  if (line.scoreCp === null || line.scoreCp === undefined) return '';
-  const cp = isRedTurn ? line.scoreCp : -line.scoreCp;
-  return cp > 50 ? 'text-red' : cp < -50 ? 'text-blue' : '';
+  if (norm.scoreCp === null || norm.scoreCp === undefined) return '';
+  return norm.scoreCp > 50 ? 'text-red' : norm.scoreCp < -50 ? 'text-blue' : '';
 }
 
 function toggleLiveAnalysis() {

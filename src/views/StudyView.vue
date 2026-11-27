@@ -366,6 +366,7 @@ import { useGameStore, type StudySubMode } from '../stores/gameStore';
 import ChessBoard from '../components/chess/ChessBoard.vue';
 import type { PieceColor, PieceType, Position } from '../core/chess/types';
 import { INITIAL_FEN } from '../core/chess/fen';
+import { scoreFromRedPerspective } from '../core/engine/score';
 
 const gameStore = useGameStore();
 
@@ -421,24 +422,22 @@ const isHumanTurn = computed(() => {
 
 const formattedScore = computed(() => {
   const info = gameStore.engineInfo;
-  if (info.scoreMate !== null) {
-    const m = gameStore.activeColor === 'red' ? info.scoreMate : -info.scoreMate;
-    return `M${m > 0 ? '+' : ''}${m}`;
+  const norm = scoreFromRedPerspective(info.scoreCp, info.scoreMate, gameStore.activeColor);
+  if (norm.scoreMate !== null) {
+    return `M${norm.scoreMate > 0 ? '+' : ''}${norm.scoreMate}`;
   }
-  if (info.scoreCp === null) return '0.00';
-  const cp = gameStore.activeColor === 'red' ? info.scoreCp : -info.scoreCp;
-  return (cp > 0 ? '+' : '') + (cp / 100).toFixed(2);
+  if (norm.scoreCp === null) return '0.00';
+  return (norm.scoreCp > 0 ? '+' : '') + (norm.scoreCp / 100).toFixed(2);
 });
 
 const scoreClass = computed(() => {
   const info = gameStore.engineInfo;
-  if (info.scoreMate !== null) {
-    const m = gameStore.activeColor === 'red' ? info.scoreMate : -info.scoreMate;
-    return m > 0 ? 'score-red' : 'score-black';
+  const norm = scoreFromRedPerspective(info.scoreCp, info.scoreMate, gameStore.activeColor);
+  if (norm.scoreMate !== null) {
+    return norm.scoreMate > 0 ? 'score-red' : 'score-black';
   }
-  if (info.scoreCp === null) return '';
-  const cp = gameStore.activeColor === 'red' ? info.scoreCp : -info.scoreCp;
-  return cp >= 0 ? 'score-red' : 'score-black';
+  if (norm.scoreCp === null) return '';
+  return norm.scoreCp >= 0 ? 'score-red' : 'score-black';
 });
 
 function switchSubMode(mode: StudySubMode) {

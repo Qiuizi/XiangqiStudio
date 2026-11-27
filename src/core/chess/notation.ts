@@ -1,4 +1,4 @@
-import type { BoardGrid, Move, PieceColor, PieceType, Position } from './types';
+import type { BoardGrid, Move, PieceColor, PieceType } from './types';
 
 const RED_NUMS = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
 const BLACK_NUMS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
@@ -24,6 +24,14 @@ const PIECE_NAMES: Record<PieceColor, Record<PieceType, string>> = {
   },
 };
 
+function sameFileOrderLabel(index: number, count: number): string {
+  if (index === 0) return '前';
+  if (index === count - 1) return '后';
+  if (count === 3) return '中';
+  const middleLabels = ['二', '三', '四', '五', '六', '七', '八'];
+  return middleLabels[index - 1] ?? String(index + 1);
+}
+
 export function fileToColName(file: number, color: PieceColor): string {
   if (color === 'red') {
     // Red: 8 -> 一, 0 -> 九
@@ -39,23 +47,24 @@ export function moveToChineseNotation(grid: BoardGrid, move: Move): string {
   const color = piece.color;
   const isRed = color === 'red';
 
-  // Check if there are multiple identical pieces on the same file (前/后)
+  // 同一路有多枚相同棋子时，按离对方近到远记为前/中/后或前、二、三、…、后。
+  // 只处理两枚时，三兵、四兵同路会记成带路号的歧义着法。
   let disambiguation = '';
-  const samePiecesOnCol: Position[] = [];
+  const sameRanks: number[] = [];
 
   for (let r = 0; r <= 9; r++) {
     const p = grid[r][from.file];
     if (p && p.color === color && p.type === piece.type) {
-      samePiecesOnCol.push({ file: from.file, rank: r });
+      sameRanks.push(r);
     }
   }
 
-  // If 2 pieces on the same file (most common for 车, 炮, 马, 兵)
-  if (samePiecesOnCol.length === 2) {
-    const isFront = isRed
-      ? from.rank > samePiecesOnCol.find(p => p.rank !== from.rank)!.rank
-      : from.rank < samePiecesOnCol.find(p => p.rank !== from.rank)!.rank;
-    disambiguation = isFront ? '前' : '后';
+  if (sameRanks.length >= 2) {
+    const ordered = [...sameRanks].sort((a, b) => (isRed ? b - a : a - b));
+    const index = ordered.indexOf(from.rank);
+    if (index >= 0) {
+      disambiguation = sameFileOrderLabel(index, ordered.length);
+    }
   }
 
   const pieceName = PIECE_NAMES[color][piece.type];

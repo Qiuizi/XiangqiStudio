@@ -20,8 +20,8 @@
     <main class="column-center">
       <div class="board-arena">
         <EvalBar 
-          :score-cp="gameStore.engineInfo.scoreCp" 
-          :score-mate="gameStore.engineInfo.scoreMate" 
+          :score-cp="redScore.scoreCp" 
+          :score-mate="redScore.scoreMate" 
         />
         <ChessBoard
           :grid="gameStore.grid"
@@ -56,9 +56,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next';
 import { useGameStore } from '../stores/gameStore';
+import { scoreFromRedPerspective } from '../core/engine/score';
 import PlayerPanel from '../components/game/PlayerPanel.vue';
 import ChessBoard from '../components/chess/ChessBoard.vue';
 import EvalBar from '../components/chess/EvalBar.vue';
@@ -66,6 +67,12 @@ import RightTabPanel from '../components/game/RightTabPanel.vue';
 import type { Position } from '../core/chess/types';
 
 const gameStore = useGameStore();
+
+const redScore = computed(() => scoreFromRedPerspective(
+  gameStore.engineInfo.scoreCp,
+  gameStore.engineInfo.scoreMate,
+  gameStore.activeColor,
+));
 
 const isLeftCollapsed = ref(false);
 const isRightCollapsed = ref(false);
